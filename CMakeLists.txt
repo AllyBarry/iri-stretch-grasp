@@ -18,9 +18,9 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/BoundingBox3D.msg"
   "msg/DetectedObject3D.msg"
   "msg/DetectedObject3DArray.msg"
+  "srv/DetectFloorObjects3D.srv"
   SKIP_INSTALL
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs vision_msgs
 )

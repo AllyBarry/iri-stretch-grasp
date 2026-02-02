@@ -17,6 +17,7 @@ from tf_transformations import quaternion_matrix
 
 
 from stretch_floor_perception.msg import DetectedObject3D, DetectedObject3DArray
+from stretch_floor_perception.srv import DetectFloorObjects3D
 
 try:
     from tf2_ros import Buffer, TransformListener
@@ -71,7 +72,6 @@ class FloorObjectDetector(Node):
         self._color_msg = None
         self._depth_msg = None
         self._info_msg = None
-        self._warned_missing_input = False
         self.img_bridge = CvBridge()
 
         self._tf_buffer = Buffer() if Buffer is not None else None
@@ -85,7 +85,9 @@ class FloorObjectDetector(Node):
             logger=self.get_logger(),
             verbose=True, # TODO make param
         )
-        self.create_timer(0.1, self._process)
+        self.service = self.create_service(
+            DetectFloorObjects3D, "detect_floor_objects_3d", self._handle_detect_service
+        )
 
     def _on_color(self, msg: Image):
         self._color_msg = msg
@@ -155,7 +157,10 @@ class FloorObjectDetector(Node):
 
     def _get_3dpts_in_window(self, px, py, box_size_x, box_size_y, depth_im, info_msg, max_points = 20000):
         height, width = depth_im.shape[:2]
-        fx, fy, cx, cy = self._get_intrinsics(info_msg)
+        intrinsics = self._get_intrinsics(info_msg)
+        if intrinsics is None:
+            return None
+        fx, fy, cx, cy = intrinsics
 
         cx_pix, cy_pix = py, (height - 1.0 - px) # Image was rotated, need to flip x-y
         xmin, xmax, ymin, ymax = self._clipped_window(cx_pix, cy_pix, box_size_x, box_size_y, width, height)
@@ -220,16 +225,42 @@ class FloorObjectDetector(Node):
         marker.lifetime = lifetime_msg
         return marker
 
-    def _process(self):
-        if self._color_msg is None or self._depth_msg is None or self._info_msg is None:
-            if not self._warned_missing_input:
-                self.get_logger().warning(
-                    f"Waiting for color, depth, and camera info messages before processing."
-                )
-                self._warned_missing_input = True
-            return
+    def _empty_det3d_msg(self, stamp=None, frame_id=None) -> DetectedObject3DArray:
+        det3d_msg = DetectedObject3DArray()
+        det3d_msg.header = Header()
+        if stamp is not None:
+            det3d_msg.header.stamp = stamp
+        if frame_id is not None:
+            det3d_msg.header.frame_id = frame_id
+        det3d_msg.detections = []
+        return det3d_msg
 
-        self._warned_missing_input = False
+    def _handle_detect_service(self, request, response):
+        det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers = self._process_once()
+        response.detections = det3d_msg
+        if det2d_msg is not None:
+            self.det2d_pub.publish(det2d_msg)
+        if image_with_boxes is not None:
+            image_with_boxes_msg = self.img_bridge.cv2_to_imgmsg(
+                image_with_boxes, encoding="rgb8"
+            )
+            image_with_boxes_msg.header = det2d_msg.header
+            self.image_with_boxes_pub.publish(image_with_boxes_msg)
+        if det3d_msg is not None:
+            self.det3d_pub.publish(det3d_msg)
+        if centroid_markers is not None:
+            self.centroid_pub.publish(centroid_markers)
+        if bbox3d_markers is not None:
+            self.bbox3d_pub.publish(bbox3d_markers)
+        return response
+
+    def _process_once(self):
+        if self._color_msg is None or self._depth_msg is None or self._info_msg is None:
+            self.get_logger().warning(
+                "Waiting for color, depth, and camera info messages before processing."
+            )
+            empty = self._empty_det3d_msg()
+            return empty, None, None, None, None
 
         color_msg = self._color_msg
         depth_msg = self._depth_msg
@@ -245,18 +276,10 @@ class FloorObjectDetector(Node):
             det2d_msg = inference_result
             image_with_boxes = None
         det2d_msg.header = self._color_msg.header
-        self.det2d_pub.publish(det2d_msg)
 
         # TODO: publish segmentation mask output when backend provides it.
         if self.mask_pub is not None:
             pass
-
-        if image_with_boxes is not None:
-            image_with_boxes_msg = self.img_bridge.cv2_to_imgmsg(
-                image_with_boxes, encoding="rgb8"
-            )
-            image_with_boxes_msg.header = self._color_msg.header
-            self.image_with_boxes_pub.publish(image_with_boxes_msg)
 
         det3d_msg = DetectedObject3DArray()
         det3d_msg.header = Header()
@@ -274,14 +297,14 @@ class FloorObjectDetector(Node):
 
         if self._tf_buffer is None:
             self.get_logger().warning("TF buffer unavailable; skipping 3D detections.")
-            return
+            return self._empty_det3d_msg(det3d_msg.header.stamp, det3d_msg.header.frame_id), det2d_msg, image_with_boxes, None, None
         try:
             transform = self._tf_buffer.lookup_transform(
                 base_frame, camera_frame, Time.from_msg(depth_msg.header.stamp), timeout=Duration(seconds=1.0)
             )
         except Exception as exc:
             self.get_logger().warning(f"TF lookup failed: {exc}")
-            return
+            return self._empty_det3d_msg(det3d_msg.header.stamp, det3d_msg.header.frame_id), det2d_msg, image_with_boxes, None, None
 
         t = transform.transform.translation
         q = transform.transform.rotation
@@ -292,7 +315,6 @@ class FloorObjectDetector(Node):
         centroid_markers = MarkerArray()
         bbox3d_markers = MarkerArray()
 
-        print("----DETECTIONS-----")
         n=0
         for det in det2d_msg.detections:
             if not det.results:
@@ -351,9 +373,7 @@ class FloorObjectDetector(Node):
             )
             bbox3d_markers.markers.append(bbox_marker)
             n += 1
-        self.det3d_pub.publish(det3d_msg)
-        self.centroid_pub.publish(centroid_markers)
-        self.bbox3d_pub.publish(bbox3d_markers)
+        return det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers
 
 
 def main():
