@@ -46,7 +46,7 @@ install(
 
 install(PROGRAMS
   stretch_floor_perception/floor_object_detector.py
-  stretch_floor_perception/manual_scan_client.py
+  stretch_floor_perception/scan_client.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

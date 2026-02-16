@@ -14,7 +14,7 @@ from stretch_floor_perception.srv import DetectFloorObjects3D
 
 class ManualScanClient(Node):
     def __init__(self):
-        super().__init__("manual_scan_client")
+        super().__init__("scan_client")
 
         self.declare_parameter("color_topic", "/camera/color/image_raw/compressed")
         self.declare_parameter("depth_topic", "/camera/aligned_depth_to_color/image_raw/compressedDepth")
