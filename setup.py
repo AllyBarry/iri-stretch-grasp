@@ -7,4 +7,12 @@ setup(
     name=package_name,
     version="0.0.1",
     packages=find_packages(exclude=["test"]),
+    maintainer='Toni Gabas',
+    maintainer_email='agabas@iri.upc.edu',
+    entry_points={
+        'console_scripts': [
+            'scan_client = stretch_floor_perception.scan_client:main',
+        ],
+    },
+
 )
