@@ -22,7 +22,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectedObject3DArray.msg"
   "srv/DetectFloorObjects3D.srv"
   SKIP_INSTALL
-  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs vision_msgs
+  DEPENDENCIES builtin_interfaces geometry_msgs sensor_msgs std_msgs vision_msgs
 )
 
 ament_python_install_package(${PROJECT_NAME})
@@ -46,6 +46,7 @@ install(
 
 install(PROGRAMS
   stretch_floor_perception/floor_object_detector.py
+  stretch_floor_perception/manual_scan_client.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

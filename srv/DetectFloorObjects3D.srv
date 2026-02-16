@@ -1,2 +1,5 @@
+sensor_msgs/CompressedImage color_msg
+sensor_msgs/CompressedImage depth_msg
+sensor_msgs/CameraInfo info_msg
 ---
 stretch_floor_perception/DetectedObject3DArray detections

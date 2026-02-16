@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.time import Time, Duration
 from rclpy.executors import MultiThreadedExecutor
+import struct
 
 from geometry_msgs.msg import Point, Quaternion, Vector3
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
-from vision_msgs.msg import Detection2DArray, BoundingBox3D
+from vision_msgs.msg import BoundingBox3D
 from cv_bridge import CvBridge
 import numpy as np
 import cv2
@@ -33,9 +33,6 @@ class FloorObjectDetector(Node):
     def __init__(self):
         super().__init__("floor_object_detector")
 
-        self.declare_parameter("color_topic", "/camera/color/image_raw")
-        self.declare_parameter("aligned_depth_topic", "/camera/aligned_depth_to_color/image_raw")
-        self.declare_parameter("camera_info_topic", "/camera/color/camera_info")
         self.declare_parameter("camera_frame", "camera_color_optical_frame")
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("yolo_backend", "yolo-darknet")
@@ -45,22 +42,7 @@ class FloorObjectDetector(Node):
         self.declare_parameter("publish_mask_topic", False)
         self.declare_parameter("mask_topic", "~/mask")
 
-        qos = QoSProfile(depth=1)
-        qos.reliability = ReliabilityPolicy.BEST_EFFORT
-
-        self.color_sub = self.create_subscription(
-            Image, self.get_parameter("color_topic").value, self._on_color, qos
-        )
-        self.depth_sub = self.create_subscription(
-            Image, self.get_parameter("aligned_depth_topic").value, self._on_depth, qos
-        )
-        self.info_sub = self.create_subscription(
-            CameraInfo, self.get_parameter("camera_info_topic").value, self._on_info, qos
-        )
-
-        self.det2d_pub = self.create_publisher(Detection2DArray, "detections_2d", 10)
         self.image_with_boxes_pub = self.create_publisher(Image, "image_with_boxes", 10)
-        self.det3d_pub = self.create_publisher(DetectedObject3DArray, "detections_3d", 10)
         self.centroid_pub = self.create_publisher(MarkerArray, "detected_centroids", 10)
         self.bbox3d_pub = self.create_publisher(MarkerArray, "detected_bboxes_3d", 10)
         self.mask_pub = None
@@ -69,9 +51,6 @@ class FloorObjectDetector(Node):
                 Image, self.get_parameter("mask_topic").value, 10
             )
 
-        self._color_msg = None
-        self._depth_msg = None
-        self._info_msg = None
         self.img_bridge = CvBridge()
 
         self._tf_buffer = Buffer() if Buffer is not None else None
@@ -88,15 +67,6 @@ class FloorObjectDetector(Node):
         self.service = self.create_service(
             DetectFloorObjects3D, "detect_floor_objects_3d", self._handle_detect_service
         )
-
-    def _on_color(self, msg: Image):
-        self._color_msg = msg
-
-    def _on_depth(self, msg: Image):
-        self._depth_msg = msg
-
-    def _on_info(self, msg: CameraInfo):
-        self._info_msg = msg
 
     def _pad_to_center_square(self, image: np.ndarray) -> tuple[np.ndarray, int, int]:
         height, width = image.shape[:2]
@@ -236,37 +206,51 @@ class FloorObjectDetector(Node):
         return det3d_msg
 
     def _handle_detect_service(self, request, response):
-        det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers = self._process_once()
+        det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers = self._process_images(
+            request.color_msg, request.depth_msg, request.info_msg
+        )
         response.detections = det3d_msg
-        if det2d_msg is not None:
-            self.det2d_pub.publish(det2d_msg)
         if image_with_boxes is not None:
             image_with_boxes_msg = self.img_bridge.cv2_to_imgmsg(
                 image_with_boxes, encoding="rgb8"
             )
             image_with_boxes_msg.header = det2d_msg.header
             self.image_with_boxes_pub.publish(image_with_boxes_msg)
-        if det3d_msg is not None:
-            self.det3d_pub.publish(det3d_msg)
         if centroid_markers is not None:
             self.centroid_pub.publish(centroid_markers)
         if bbox3d_markers is not None:
             self.bbox3d_pub.publish(bbox3d_markers)
         return response
 
-    def _process_once(self):
-        if self._color_msg is None or self._depth_msg is None or self._info_msg is None:
-            self.get_logger().warning(
-                "Waiting for color, depth, and camera info messages before processing."
-            )
-            empty = self._empty_det3d_msg()
-            return empty, None, None, None, None
+    def _decode_depth_compressed_image(self, depth_msg: CompressedImage):
+        # Try cv_bridge first; fall back to manual handling for compressedDepth payloads.
+        try:
+            return self.img_bridge.compressed_imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+        except Exception:
+            pass
 
-        color_msg = self._color_msg
-        depth_msg = self._depth_msg
-        info_msg = self._info_msg
+        depth_bytes = np.frombuffer(depth_msg.data, dtype=np.uint8)
+        depth_img = cv2.imdecode(depth_bytes, cv2.IMREAD_UNCHANGED)
+        if depth_img is not None:
+            return depth_img
 
-        color_img = self.img_bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
+        if len(depth_msg.data) > 12:
+            try:
+                struct.unpack("iff", depth_msg.data[:12])
+                depth_img = cv2.imdecode(
+                    np.frombuffer(depth_msg.data[12:], dtype=np.uint8), cv2.IMREAD_UNCHANGED
+                )
+                if depth_img is not None:
+                    return depth_img
+            except struct.error:
+                pass
+
+        raise RuntimeError(f"Could not decode depth compressed image with format '{depth_msg.format}'")
+
+    def _process_images(
+        self, color_msg: CompressedImage, depth_msg: CompressedImage, info_msg: CameraInfo
+    ):
+        color_img = self.img_bridge.compressed_imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         color_img = cv2.rotate(color_img, cv2.ROTATE_90_CLOCKWISE)
         color_img, pad_left, pad_top = self._pad_to_center_square(color_img)
         inference_result = self.inference_backend.infer(color_img)
@@ -275,7 +259,7 @@ class FloorObjectDetector(Node):
         else:
             det2d_msg = inference_result
             image_with_boxes = None
-        det2d_msg.header = self._color_msg.header
+        det2d_msg.header = color_msg.header
 
         # TODO: publish segmentation mask output when backend provides it.
         if self.mask_pub is not None:
@@ -283,10 +267,10 @@ class FloorObjectDetector(Node):
 
         det3d_msg = DetectedObject3DArray()
         det3d_msg.header = Header()
-        det3d_msg.header.stamp = self._color_msg.header.stamp
+        det3d_msg.header.stamp = color_msg.header.stamp
         det3d_msg.header.frame_id = self.get_parameter("base_frame").value
 
-        depth_img = self.img_bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+        depth_img = self._decode_depth_compressed_image(depth_msg)
         if depth_img.dtype == np.uint16:
             depth_m = depth_img.astype(np.float32) * 0.001
         else:
