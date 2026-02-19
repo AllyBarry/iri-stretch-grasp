@@ -10,6 +10,7 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import CameraInfo, CompressedImage
 
 from stretch_floor_perception.srv import DetectFloorObjects3D
+from stretch_demos_interfaces.srv import GraspPoint
 
 
 class ManualScanClient(Node):
@@ -20,6 +21,7 @@ class ManualScanClient(Node):
         self.declare_parameter("depth_topic", "/camera/aligned_depth_to_color/image_raw/compressedDepth")
         self.declare_parameter("camera_info_topic", "/camera/color/camera_info")
         self.declare_parameter("service_name", "detect_floor_objects_3d")
+        self.declare_parameter("grasp_service_name", "/grasp_point")
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -44,6 +46,12 @@ class ManualScanClient(Node):
         self.get_logger().info(f"Waiting for service '{service_name}'...")
         self._client.wait_for_service()
         self.get_logger().info("Service available.")
+
+        grasp_service_name = self.get_parameter("grasp_service_name").value
+        self._grasp_client = self.create_client(GraspPoint, grasp_service_name)
+        self.get_logger().info(f"Waiting for service '{grasp_service_name}'...")
+        self._grasp_client.wait_for_service()
+        self.get_logger().info("Grasp service available.")
 
     def _on_color(self, msg: CompressedImage):
         with self._lock:
@@ -98,6 +106,53 @@ class ManualScanClient(Node):
                 f"{idx}: class='{det.class_name}' score={det.score:.3f} "
                 f"xyz=({p.x:.3f}, {p.y:.3f}, {p.z:.3f})"
             )
+
+        selection = self._prompt_for_detection_index(len(detections))
+        if selection is None:
+            print("No object selected.")
+            return
+
+        selected = detections[selection]
+        self._call_grasp_point(selected)
+
+    def _prompt_for_detection_index(self, num_detections: int):
+        prompt = f"Select object index to grasp [0-{num_detections - 1}] (or 'q' to cancel): "
+        while rclpy.ok():
+            user_input = input(prompt).strip().lower()
+            if user_input == "q":
+                return None
+            try:
+                index = int(user_input)
+            except ValueError:
+                print("Invalid selection. Enter a numeric index or 'q'.")
+                continue
+
+            if 0 <= index < num_detections:
+                return index
+
+            print(f"Index out of range. Choose a value from 0 to {num_detections - 1}.")
+        return None
+
+    def _call_grasp_point(self, detection) -> None:
+        request = GraspPoint.Request()
+        request.target.header = detection.header
+        request.target.point = detection.centroid
+
+        future = self._grasp_client.call_async(request)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.05)
+
+        if not future.done():
+            print("Grasp request canceled before service response.")
+            return
+
+        exception = future.exception()
+        if exception is not None:
+            print(f"Grasp service call failed: {exception}")
+            return
+
+        response = future.result()
+        print(f"Grasp response: success={response.success} message='{response.message}'")
 
 
 def main():
