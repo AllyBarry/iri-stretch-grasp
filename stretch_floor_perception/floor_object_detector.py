@@ -225,27 +225,32 @@ class FloorObjectDetector(Node):
     def _decode_depth_compressed_image(self, depth_msg: CompressedImage):
         # Try cv_bridge first; fall back to manual handling for compressedDepth payloads.
         try:
-            return self.img_bridge.compressed_imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-        except Exception:
-            pass
+            depth_img = self.img_bridge.compressed_imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+            if depth_img is None:
+                depth_fmt, compr_type = depth_msg.format.split(';')
+                if depth_fmt.strip() == "16UC1" and compr_type.strip() == "compressedDepth":
+                    self.get_logger().warning(f"Using custom depth decoding for {depth_fmt}")
+                    PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+                    raw = bytes(depth_msg.data)
+                    png_start = raw.find(PNG_MAGIC)
+                    if png_start == -1:
+                        png_start = 0
+                    raw_png = raw[png_start:]
+                
+                    depth_bytes = np.frombuffer(raw_png, dtype=np.uint8)
+                    depth_img = cv2.imdecode(depth_bytes, cv2.IMREAD_UNCHANGED)
+                    if depth_img is not None:
+                        return depth_img
+                    else:
+                        raise RuntimeError(f"Could not decode depth compressed image with format '{depth_msg.format}'")
+                else:
+                    raise RuntimeError(f"Could not decode depth compressed image with format '{depth_msg.format}'")
+            else:
+                return depth_img
 
-        depth_bytes = np.frombuffer(depth_msg.data, dtype=np.uint8)
-        depth_img = cv2.imdecode(depth_bytes, cv2.IMREAD_UNCHANGED)
-        if depth_img is not None:
-            return depth_img
+        except Exception as e:
+            raise RuntimeError(f"Could not decode depth compressed image with format '{depth_msg.format}'")
 
-        if len(depth_msg.data) > 12:
-            try:
-                struct.unpack("iff", depth_msg.data[:12])
-                depth_img = cv2.imdecode(
-                    np.frombuffer(depth_msg.data[12:], dtype=np.uint8), cv2.IMREAD_UNCHANGED
-                )
-                if depth_img is not None:
-                    return depth_img
-            except struct.error:
-                pass
-
-        raise RuntimeError(f"Could not decode depth compressed image with format '{depth_msg.format}'")
 
     def _process_images(
         self, color_msg: CompressedImage, depth_msg: CompressedImage, info_msg: CameraInfo
@@ -357,6 +362,7 @@ class FloorObjectDetector(Node):
             )
             bbox3d_markers.markers.append(bbox_marker)
             n += 1
+        self.get_logger().info(f"DONE")
         return det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers
 
 
