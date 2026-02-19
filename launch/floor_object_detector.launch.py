@@ -12,9 +12,6 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "color_topic": "/camera/color/image_raw",
-                        "aligned_depth_topic": "/camera/depth/image_rect_raw",
-                        "camera_info_topic": "/camera/color/camera_info",
                         "camera_frame": "camera_depth_optical_frame",
                         "base_frame": "base_link",
                         "yolo_backend": "yolo-darknet",
