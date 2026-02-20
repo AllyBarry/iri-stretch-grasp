@@ -8,13 +8,19 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
 else
     tmux new-session -d -s "$SESSION"
 
+    # Stop gamepad teleop if running
+    stretch_free_robot_process.py
+
+    # Home the robot
+    stretch_robot_home.py
+
     # WINDOW 1: Funmap launch (funmap, stretch-driver, realsense, rviz)
-    tmux rename-window -t "$SESSION:1" "Driver"
-    tmux send-keys -t "$SESSION:Driver" "ros2 launch stretch_core stretch_driver.launch.py" C-m
+    tmux new-window -t "$SESSION:1" -n "Driver"
+    tmux send-keys -t "$SESSION:Driver" "ros2 launch stretch_funmap mapping.launch.py" C-m
 
     # WINDOW 2: Keyboard Teleop
     tmux new-window -t "$SESSION:2" -n "Teleop"
-    tmux send-keys -t "$SESSION:Teleop" "ros2 run stretch_core keyboard_teleop" C-m
+    tmux send-keys -t "$SESSION:Teleop" "ros2 run stretch_core keyboard_teleop --ros-args -p mapping_on:=True" C-m
 
     # WINDOW 3: Grasp point service
     tmux new-window -t "$SESSION:3" -n "Grasp"
