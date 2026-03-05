@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time, Duration
 from rclpy.executors import MultiThreadedExecutor
-import struct
+from time import time
 
 from geometry_msgs.msg import Point, Quaternion, Vector3
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
@@ -14,6 +14,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import cv2
 from tf_transformations import quaternion_matrix
+from PIL import Image as PILImage
 
 
 from stretch_floor_perception.msg import DetectedObject3D, DetectedObject3DArray
@@ -35,10 +36,10 @@ class FloorObjectDetector(Node):
 
         self.declare_parameter("camera_frame", "camera_color_optical_frame")
         self.declare_parameter("base_frame", "base_link")
-        self.declare_parameter("yolo_backend", "yolo-darknet")
-        self.declare_parameter("yolo_model_path", "")
-        self.declare_parameter("yolo_config_file", "")
-        self.declare_parameter("yolo_class_names_file", "")
+        self.declare_parameter("inference_backend", "yolo-darknet")
+        self.declare_parameter("model_path", "")
+        self.declare_parameter("config_file", "")
+        self.declare_parameter("class_names_file", "")
         self.declare_parameter("publish_mask_topic", False)
         self.declare_parameter("mask_topic", "~/mask")
 
@@ -57,10 +58,10 @@ class FloorObjectDetector(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True) if self._tf_buffer else None
 
         self.inference_backend = InferenceBackend(
-            self.get_parameter("yolo_backend").value,
-            cfg_file=self.get_parameter("yolo_config_file").value,
-            names_file=self.get_parameter("yolo_class_names_file").value,
-            weights_file=self.get_parameter("yolo_model_path").value,
+            self.get_parameter("inference_backend").value,
+            cfg_file=self.get_parameter("config_file").value,
+            names_file=self.get_parameter("class_names_file").value,
+            model=self.get_parameter("model_path").value,
             logger=self.get_logger(),
             verbose=True, # TODO make param
         )
@@ -211,6 +212,8 @@ class FloorObjectDetector(Node):
         )
         response.detections = det3d_msg
         if image_with_boxes is not None:
+            if isinstance(image_with_boxes, PILImage.Image):
+                image_with_boxes = np.array(image_with_boxes)
             image_with_boxes_msg = self.img_bridge.cv2_to_imgmsg(
                 image_with_boxes, encoding="rgb8"
             )
@@ -255,10 +258,14 @@ class FloorObjectDetector(Node):
     def _process_images(
         self, color_msg: CompressedImage, depth_msg: CompressedImage, info_msg: CameraInfo
     ):
+        t_start= time()
+        self.get_logger().info("Image received. Starting inference.")
         color_img = self.img_bridge.compressed_imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         color_img = cv2.rotate(color_img, cv2.ROTATE_90_CLOCKWISE)
         color_img, pad_left, pad_top = self._pad_to_center_square(color_img)
+        print(color_img.shape)
         inference_result = self.inference_backend.infer(color_img)
+        self.get_logger().info("Got inference result")
         if isinstance(inference_result, tuple):
             det2d_msg, image_with_boxes = inference_result
         else:
@@ -363,6 +370,7 @@ class FloorObjectDetector(Node):
             bbox3d_markers.markers.append(bbox_marker)
             n += 1
         self.get_logger().info(f"DONE")
+        self.get_logger().warning(f"Took: {time()-t_start} seconds.")
         return det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers
 
 

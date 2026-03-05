@@ -14,10 +14,10 @@ def generate_launch_description():
                     {
                         "camera_frame": "camera_depth_optical_frame",
                         "base_frame": "base_link",
-                        "yolo_backend": "yolo-darknet",
-                        "yolo_model_path": "/workspaces/stretch_dev/yolov4-tiny.weights",
-                        "yolo_config_file": "/workspaces/darknet/cfg/yolov4-tiny.cfg",
-                        "yolo_class_names_file": "/workspaces/darknet/cfg/coco.names",
+                        "inference_backend": "yolo-darknet",
+                        "model_path": "/workspaces/stretch_dev/yolov4-tiny.weights",
+                        "config_file": "/workspaces/darknet/cfg/yolov4-tiny.cfg",
+                        "class_names_file": "/workspaces/darknet/cfg/coco.names",
                         "publish_mask_topic": False,
                     }
                 ],
