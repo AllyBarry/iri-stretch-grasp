@@ -20,7 +20,7 @@ else
 
     # WINDOW 2: Funmap launch (funmap, stretch-driver, realsense, rviz)
     tmux new-window -t "$SESSION:2" -n "Driver"
-    tmux send-keys -t "$SESSION:Driver" "ros2 launch stretch_funmap mapping.launch.py" C-m
+    tmux send-keys -t "$SESSION:Driver" "ros2 launch stretch_tools mapping.launch.py" C-m
 
     # WINDOW 3: Keyboard Teleop
     tmux new-window -t "$SESSION:3" -n "Teleop"
