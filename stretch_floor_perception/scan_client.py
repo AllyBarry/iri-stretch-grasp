@@ -10,7 +10,7 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import CameraInfo, CompressedImage
 
 from stretch_floor_perception.srv import DetectFloorObjects3D
-from stretch_demos_interfaces.srv import GraspPoint
+from stretch_floor_perception.srv import GraspPoint
 
 
 class ManualScanClient(Node):

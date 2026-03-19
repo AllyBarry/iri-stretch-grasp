@@ -28,7 +28,7 @@ else
 
     # WINDOW 4: Grasp point service
     tmux new-window -t "$SESSION:4" -n "Grasp"
-    tmux send-keys -t "$SESSION:Grasp" "ros2 run stretch_demos grasp_point" C-m
+    tmux send-keys -t "$SESSION:Grasp" "ros2 run stretch_floor_perception grasp_point" C-m
 
     # WINDOW 5: Scan Client
     tmux new-window -t "$SESSION:5" -n "Scan"
