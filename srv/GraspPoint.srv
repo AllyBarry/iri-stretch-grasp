@@ -1,0 +1,5 @@
+geometry_msgs/PointStamped target
+float32 assumed_width_m
+---
+bool success
+string message
