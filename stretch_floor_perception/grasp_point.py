@@ -221,7 +221,7 @@ class GraspPointNode(hm.HelloNode):
             msg = request.target
             assumed_width_m = request.assumed_width_m if request.assumed_width_m > 0.0 else self.assumed_width_m
 
-            if self.header.stamp.sec > 0:
+            if not msg.header.stamp.sec > 0:
                 self.logger.error('No point cloud available yet, so unable to grasp.')
                 response.success = False
                 response.message = 'No point cloud available yet, so unable to grasp.'
