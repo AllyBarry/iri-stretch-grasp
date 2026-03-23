@@ -17,7 +17,7 @@ import os
 import hello_helpers.hello_misc as hm
 import stretch_funmap.navigate as nv
 import stretch_funmap.manipulation_planning as mp
-from stretch_demos_interfaces.srv import GraspPoint
+from stretch_floor_perception.srv import GraspPoint
 
 
 class DebugMoveCancelled(RuntimeError):
