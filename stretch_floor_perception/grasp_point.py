@@ -212,10 +212,6 @@ class GraspPointNode(hm.HelloNode):
         self._confirm_motion(self._describe_move(description=description, forward_m=forward_m), forward_m=forward_m)
         self.drive(forward_m)
 
-    def debug_stow_the_robot(self, description='stow the robot'):
-        self._confirm_motion(description)
-        self.stow_the_robot()
-
     def grasp_point_service_callback(self, request, response):
         try:
             msg = request.target
@@ -230,7 +226,7 @@ class GraspPointNode(hm.HelloNode):
             self.logger.info(f'Grasp point received: frame={msg.header.frame_id} x={msg.point.x:.3f} y={msg.point.y:.3f} z={msg.point.z:.3f}')
 
             # Optional: stow before the attempt to get a consistent starting pose.
-            self.debug_stow_the_robot()
+            self.stow_the_robot()
 
             manip = self.look_at_surface(scan_time_s=self.scan_time_s)
             if manip is None:
@@ -270,6 +266,7 @@ class GraspPointNode(hm.HelloNode):
             }
 
             max_lift_m = 1.09
+            min_lift_m = 0.07
             min_extension_m = 0.01
             max_extension_m = 0.5
             initial_wrist_extension = 0.2
@@ -294,8 +291,8 @@ class GraspPointNode(hm.HelloNode):
             self.logger.info('Extend wrist to avoid collision with base.')
             self.debug_move_to_pose({'wrist_extension': initial_wrist_extension})
 
-            self.logger.info('Raise tool to pregrasp height.')
-            lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m, 0.1) # TODO fix, it's always max since it's negative
+            self.logger.info('Raise/Lower tool to pregrasp height.')
+            lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m, min_lift_m)
             lift_to_pregrasp_m = min(lift_to_pregrasp_m, max_lift_m)
             self.debug_move_to_pose({'joint_lift': lift_to_pregrasp_m})
 
@@ -328,7 +325,7 @@ class GraspPointNode(hm.HelloNode):
             )
             self.logger.info('Move the grasp pose from the pregrasp pose.')
 
-            lift_m = max(self.lift_position + grasp_lift_m, 0.1)
+            lift_m = max(self.lift_position + grasp_lift_m, min_lift_m)
             lift_m = min(lift_m, max_lift_m)
             extension_m = max(self.wrist_position + grasp_wrist_extension_m, min_extension_m)
             extension_m = min(extension_m, max_extension_m)
