@@ -240,18 +240,9 @@ class GraspPointNode(hm.HelloNode):
 
             point_xyz = np.array([msg.point.x, msg.point.y, msg.point.z, 1.0])
             point_image_pix = max_height_im.get_point_in_image(point_xyz, msg.header.frame_id, self.tf2_buffer)
-            #points_to_image_mat, _ = max_height_im.get_points_to_image_mat(
-            #    msg.header.frame_id, self.tf2_buffer)
-            #if points_to_image_mat is None:
-            #    self.logger.error('points_to_image_mat not found for frame: {msg.header.frame_id}')
-            #    response.success = False
-            #    response.message = 'points_to_image_mat not found for frame'
-            #    return response
-#
-            #self.logger.info(f"robot loc: {points_to_image_mat}")
-            #point_image_pix = np.matmul(points_to_image_mat, point_xyz)[:3]
             i_x, i_y, i_z = point_image_pix
-            self.logger.info(f"point image pix: x={i_x:.3f} y={i_y:.3f} z={i_z:.3f}")
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
 
             h, w = max_height_im.image.shape
             if not ((i_x >= 0) and (i_y >= 0) and (i_x < w) and (i_y < h)):
@@ -277,13 +268,25 @@ class GraspPointNode(hm.HelloNode):
             if self.get_tool() == "tool_stretch_dex_wrist":
                 self.logger.info('Rotate pitch/roll for grasping.')
                 self.debug_move_to_pose({'joint_wrist_pitch': -0.3, 'joint_wrist_roll': 0.0})
+            
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
 
             pregrasp_yaw = manip.get_pregrasp_yaw(grasp_target, self.tf2_buffer)
             self.logger.info('Rotate the gripper for grasping.')
             self.debug_move_to_pose({'joint_wrist_yaw': pregrasp_yaw})
 
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
+
             self.logger.info('Extend wrist to avoid collision with base.')
             self.debug_move_to_pose({'wrist_extension': initial_wrist_extension})
+
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
 
             # NOTE: funmap returns pregrasp lift with extra 0.1 height.
             pregrasp_lift_m = manip.get_pregrasp_lift(grasp_target, self.tf2_buffer)
@@ -300,8 +303,15 @@ class GraspPointNode(hm.HelloNode):
             lift_to_pregrasp_m = min(lift_to_pregrasp_m, max_lift_m)
             self.debug_move_to_pose({'joint_lift': lift_to_pregrasp_m})
 
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
             self.logger.info('Open the gripper.')
             self.debug_move_to_pose({'gripper_aperture': 0.07})
+
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
 
             pregrasp_mobile_base_m, pregrasp_wrist_extension_m = (
                 manip.get_pregrasp_planar_translation(grasp_target, self.tf2_buffer)
@@ -311,6 +321,10 @@ class GraspPointNode(hm.HelloNode):
 
             self.logger.info('Drive to pregrasp location.')
             self.debug_drive(pregrasp_mobile_base_m)
+
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
 
             if self.wrist_position is None:
                 self.logger.error('wrist position unavailable')
@@ -323,6 +337,10 @@ class GraspPointNode(hm.HelloNode):
                 extension_m = min(extension_m, max_extension_m)
                 self.logger.info('Extend tool above surface.')
                 self.debug_move_to_pose({'wrist_extension': extension_m})
+
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
 
             grasp_mobile_base_m, grasp_lift_m, grasp_wrist_extension_m = (
                 manip.get_grasp_from_pregrasp(grasp_target, self.tf2_buffer)
@@ -339,9 +357,17 @@ class GraspPointNode(hm.HelloNode):
                 'wrist_extension': extension_m
             })
 
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
+
             self.logger.info('Attempt to close the gripper on the object.')
             gripper_aperture_m = max(0.0, assumed_width_m - 0.18)
             self.debug_move_to_pose({'gripper_aperture': gripper_aperture_m})
+
+            tip_xyz = self._get_gripper_tip_in_map()
+            self.logger.info(f'Fingertip loc: x={tip_xyz[0]:.3f} y={tip_xyz[1]:.3f} z={tip_xyz[2]:.3f}')
+
 
             time.sleep(3.0)
 
