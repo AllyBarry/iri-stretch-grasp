@@ -236,17 +236,20 @@ class GraspPointNode(hm.HelloNode):
                 return response
 
             max_height_im = manip.max_height_im
-            points_to_image_mat, _ = max_height_im.get_points_to_image_mat(
-                msg.header.frame_id, self.tf2_buffer)
-            if points_to_image_mat is None:
-                self.logger.error('points_to_image_mat not found for frame: {msg.header.frame_id}')
-                response.success = False
-                response.message = 'points_to_image_mat not found for frame'
-                return response
+
 
             point_xyz = np.array([msg.point.x, msg.point.y, msg.point.z, 1.0])
-            self.logger.info(f"robot loc: {points_to_image_mat}")
-            point_image_pix = np.matmul(points_to_image_mat, point_xyz)[:3]
+            point_image_pix = max_height_im.get_point_in_image(point_xyz, msg.header.frame_id, self.tf2_buffer)
+            #points_to_image_mat, _ = max_height_im.get_points_to_image_mat(
+            #    msg.header.frame_id, self.tf2_buffer)
+            #if points_to_image_mat is None:
+            #    self.logger.error('points_to_image_mat not found for frame: {msg.header.frame_id}')
+            #    response.success = False
+            #    response.message = 'points_to_image_mat not found for frame'
+            #    return response
+#
+            #self.logger.info(f"robot loc: {points_to_image_mat}")
+            #point_image_pix = np.matmul(points_to_image_mat, point_xyz)[:3]
             i_x, i_y, i_z = point_image_pix
             self.logger.info(f"point image pix: x={i_x:.3f} y={i_y:.3f} z={i_z:.3f}")
 
@@ -271,15 +274,6 @@ class GraspPointNode(hm.HelloNode):
             max_extension_m = 0.5
             initial_wrist_extension = 0.2
 
-            pregrasp_lift_m = manip.get_pregrasp_lift(grasp_target, self.tf2_buffer)
-            if self.get_tool() == "tool_stretch_dex_wrist":
-                pregrasp_lift_m += 0.02
-            if self.lift_position is None:
-                self.logger.error('lift position unavailable')
-                response.success = False
-                response.message = 'lift position unavailable'
-                return response
-
             if self.get_tool() == "tool_stretch_dex_wrist":
                 self.logger.info('Rotate pitch/roll for grasping.')
                 self.debug_move_to_pose({'joint_wrist_pitch': -0.3, 'joint_wrist_roll': 0.0})
@@ -290,6 +284,16 @@ class GraspPointNode(hm.HelloNode):
 
             self.logger.info('Extend wrist to avoid collision with base.')
             self.debug_move_to_pose({'wrist_extension': initial_wrist_extension})
+
+            # NOTE: funmap returns pregrasp lift with extra 0.1 height.
+            pregrasp_lift_m = manip.get_pregrasp_lift(grasp_target, self.tf2_buffer)
+            if self.get_tool() == "tool_stretch_dex_wrist":
+                pregrasp_lift_m += 0.02
+            if self.lift_position is None:
+                self.logger.error('lift position unavailable')
+                response.success = False
+                response.message = 'lift position unavailable'
+                return response
 
             self.logger.info('Raise/Lower tool to pregrasp height.')
             lift_to_pregrasp_m = max(self.lift_position + pregrasp_lift_m, min_lift_m)
