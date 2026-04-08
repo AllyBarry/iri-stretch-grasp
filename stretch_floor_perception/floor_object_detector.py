@@ -9,12 +9,13 @@ from geometry_msgs.msg import Point, Quaternion, Vector3
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
-from vision_msgs.msg import BoundingBox3D
+from vision_msgs.msg import BoundingBox3D, Detection2D as RosDetection2D, Detection2DArray, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
 import numpy as np
 import cv2
 from tf_transformations import quaternion_matrix
 from PIL import Image as PILImage
+from typing import Optional
 
 
 from stretch_floor_perception.msg import DetectedObject3D, DetectedObject3DArray
@@ -27,7 +28,7 @@ except ImportError:
     TransformListener = None
 
 
-from stretch_floor_perception.inference_backends import InferenceBackend
+from stretch_floor_perception.inference_backends import Detection2D, InferenceBackend
 
 
 class FloorObjectDetector(Node):
@@ -40,17 +41,21 @@ class FloorObjectDetector(Node):
         self.declare_parameter("model_path", "")
         self.declare_parameter("config_file", "")
         self.declare_parameter("class_names_file", "")
+        self.declare_parameter("use_ram_labels", False)
+        self.declare_parameter("ram_model_path", "")
+        self.declare_parameter("ram_image_size", 384)
+        self.declare_parameter("ram_batch_size", 8)
         self.declare_parameter("publish_mask_topic", False)
         self.declare_parameter("mask_topic", "~/mask")
+        self.declare_parameter("max_bbox_volume_m3", 0.0)
+        self.declare_parameter("max_distance_above_floor_m", 0.0)
+        self.declare_parameter("floor_z_in_base_frame_m", 0.0)
 
         self.image_with_boxes_pub = self.create_publisher(Image, "image_with_boxes", 10)
         self.centroid_pub = self.create_publisher(MarkerArray, "detected_centroids", 10)
         self.bbox3d_pub = self.create_publisher(MarkerArray, "detected_bboxes_3d", 10)
-        self.mask_pub = None
-        if self.get_parameter("publish_mask_topic").value:
-            self.mask_pub = self.create_publisher(
-                Image, self.get_parameter("mask_topic").value, 10
-            )
+        self._prev_centroid_marker_count = 0
+        self._prev_bbox3d_marker_count = 0
 
         self.img_bridge = CvBridge()
 
@@ -62,12 +67,46 @@ class FloorObjectDetector(Node):
             cfg_file=self.get_parameter("config_file").value,
             names_file=self.get_parameter("class_names_file").value,
             model=self.get_parameter("model_path").value,
+            use_ram_labels=self.get_parameter("use_ram_labels").value,
+            ram_model_path=self.get_parameter("ram_model_path").value,
+            ram_image_size=self.get_parameter("ram_image_size").value,
+            ram_batch_size=self.get_parameter("ram_batch_size").value,
             logger=self.get_logger(),
             verbose=True, # TODO make param
         )
         self.service = self.create_service(
             DetectFloorObjects3D, "detect_floor_objects_3d", self._handle_detect_service
         )
+
+    def _to_detection2d_array_msg(self, detections: Detection2D, header: Header) -> Detection2DArray:
+        det2d_msg = Detection2DArray()
+        det2d_msg.header = header
+
+        boxes_xyxy = detections.boxes_xyxy if detections.boxes_xyxy is not None else []
+        ids = detections.ids if detections.ids is not None else []
+        id2label = detections.id2label if detections.id2label is not None else {}
+        scores = detections.scores if detections.scores is not None else []
+
+        for box, class_id, score in zip(boxes_xyxy, ids, scores):
+            box_np = np.asarray(box, dtype=np.float32).reshape(-1)
+            if box_np.size < 4:
+                continue
+
+            xmin, ymin, xmax, ymax = box_np[:4]
+            det = RosDetection2D()
+            det.bbox.center.position.x = float((xmin + xmax) * 0.5)
+            det.bbox.center.position.y = float((ymin + ymax) * 0.5)
+            det.bbox.center.theta = 0.0
+            det.bbox.size_x = float(xmax - xmin)
+            det.bbox.size_y = float(ymax - ymin)
+
+            result = ObjectHypothesisWithPose()
+            result.hypothesis.class_id = str(id2label.get(class_id, class_id))
+            result.hypothesis.score = float(score)
+            det.results = [result]
+            det2d_msg.detections.append(det)
+
+        return det2d_msg
 
     def _pad_to_center_square(self, image: np.ndarray) -> tuple[np.ndarray, int, int]:
         height, width = image.shape[:2]
@@ -167,6 +206,49 @@ class FloorObjectDetector(Node):
         det3d.bbox3d = bbox
         return det3d
 
+    def _bbox_volume(self, size: np.ndarray) -> float:
+        size_xyz = np.asarray(size, dtype=np.float32).reshape(-1)
+        if size_xyz.size < 3:
+            return 0.0
+        return float(np.prod(np.maximum(size_xyz[:3], 0.0)))
+
+    def _bbox_bottom_z(self, centroid: np.ndarray, size: np.ndarray) -> float:
+        centroid_xyz = np.asarray(centroid, dtype=np.float32).reshape(-1)
+        size_xyz = np.asarray(size, dtype=np.float32).reshape(-1)
+        if centroid_xyz.size < 3 or size_xyz.size < 3:
+            return float("inf")
+        return float(centroid_xyz[2] - 0.5 * max(float(size_xyz[2]), 0.0))
+
+    def _passes_3d_filters(
+        self,
+        class_id: str,
+        centroid: np.ndarray,
+        size: np.ndarray,
+        max_bbox_volume_m3: float,
+        max_distance_above_floor_m: float,
+        floor_z_in_base_frame_m: float,
+    ) -> bool:
+        bbox_volume_m3 = self._bbox_volume(size)
+        if max_bbox_volume_m3 > 0.0 and bbox_volume_m3 > max_bbox_volume_m3:
+            self.get_logger().info(
+                f"Filtering detection '{class_id}': bbox volume "
+                f"{bbox_volume_m3:.4f} m^3 exceeds limit {max_bbox_volume_m3:.4f} m^3."
+            )
+            return False
+
+        if max_distance_above_floor_m > 0.0:
+            bbox_bottom_z = self._bbox_bottom_z(centroid, size)
+            distance_above_floor_m = bbox_bottom_z - floor_z_in_base_frame_m
+            if distance_above_floor_m > max_distance_above_floor_m:
+                self.get_logger().info(
+                    f"Filtering detection '{class_id}': bbox bottom is "
+                    f"{distance_above_floor_m:.4f} m above floor, exceeding limit "
+                    f"{max_distance_above_floor_m:.4f} m."
+                )
+                return False
+
+        return True
+
     def _make_marker(
         self,
         header,
@@ -178,7 +260,6 @@ class FloorObjectDetector(Node):
         scale,
         color_rgb,
         alpha,
-        lifetime_msg,
     ) -> Marker:
         marker = Marker()
         marker.header = header
@@ -193,7 +274,6 @@ class FloorObjectDetector(Node):
         marker.color.g = color_rgb[1]
         marker.color.b = color_rgb[2]
         marker.color.a = alpha
-        marker.lifetime = lifetime_msg
         return marker
 
     def _empty_det3d_msg(self, stamp=None, frame_id=None) -> DetectedObject3DArray:
@@ -263,19 +343,13 @@ class FloorObjectDetector(Node):
         color_img = self.img_bridge.compressed_imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         color_img = cv2.rotate(color_img, cv2.ROTATE_90_CLOCKWISE)
         color_img, pad_left, pad_top = self._pad_to_center_square(color_img)
-        print(color_img.shape)
-        inference_result = self.inference_backend.infer(color_img)
+
+        detections = self.inference_backend.infer(color_img, threshold=0.85)
         self.get_logger().info("Got inference result")
-        if isinstance(inference_result, tuple):
-            det2d_msg, image_with_boxes = inference_result
-        else:
-            det2d_msg = inference_result
-            image_with_boxes = None
+        det2d_msg = self._to_detection2d_array_msg(detections, color_msg.header)
+        image_with_boxes = detections.result_image()
         det2d_msg.header = color_msg.header
 
-        # TODO: publish segmentation mask output when backend provides it.
-        if self.mask_pub is not None:
-            pass
 
         det3d_msg = DetectedObject3DArray()
         det3d_msg.header = Header()
@@ -310,6 +384,13 @@ class FloorObjectDetector(Node):
         det3d_msg.detections = []
         centroid_markers = MarkerArray()
         bbox3d_markers = MarkerArray()
+        max_bbox_volume_m3 = float(self.get_parameter("max_bbox_volume_m3").value)
+        max_distance_above_floor_m = float(
+            self.get_parameter("max_distance_above_floor_m").value
+        )
+        floor_z_in_base_frame_m = float(
+            self.get_parameter("floor_z_in_base_frame_m").value
+        )
 
         n=0
         for det in det2d_msg.detections:
@@ -338,10 +419,18 @@ class FloorObjectDetector(Node):
             min_xyz = points_base.min(axis=0)
             max_xyz = points_base.max(axis=0)
             size = max_xyz - min_xyz
+            if not self._passes_3d_filters(
+                class_id=class_id,
+                centroid=centroid,
+                size=size,
+                max_bbox_volume_m3=max_bbox_volume_m3,
+                max_distance_above_floor_m=max_distance_above_floor_m,
+                floor_z_in_base_frame_m=floor_z_in_base_frame_m,
+            ):
+                continue
 
             det3d = self._make_detectedobject3d_msg(det3d_msg.header, class_id, score, centroid, size)
             det3d_msg.detections.append(det3d)
-            marker_lifetime = Duration(seconds=0.2).to_msg()
             centroid_marker = self._make_marker(
                 det3d_msg.header,
                 "detected_centroids",
@@ -352,7 +441,6 @@ class FloorObjectDetector(Node):
                 Vector3(x=0.05, y=0.05, z=0.05),
                 (0.1, 0.9, 0.2),
                 1.0,
-                marker_lifetime,
             )
             centroid_markers.markers.append(centroid_marker)
             bbox_marker = self._make_marker(
@@ -365,10 +453,27 @@ class FloorObjectDetector(Node):
                 det3d.bbox3d.size,
                 (0.2, 0.4, 1.0),
                 0.5,
-                marker_lifetime,
             )
             bbox3d_markers.markers.append(bbox_marker)
             n += 1
+        for marker_id in range(n, self._prev_centroid_marker_count):
+            stale_marker = Marker()
+            stale_marker.header = det3d_msg.header
+            stale_marker.ns = "detected_centroids"
+            stale_marker.id = marker_id
+            stale_marker.action = Marker.DELETE
+            centroid_markers.markers.append(stale_marker)
+
+        for marker_id in range(n, self._prev_bbox3d_marker_count):
+            stale_marker = Marker()
+            stale_marker.header = det3d_msg.header
+            stale_marker.ns = "detected_bboxes_3d"
+            stale_marker.id = marker_id
+            stale_marker.action = Marker.DELETE
+            bbox3d_markers.markers.append(stale_marker)
+
+        self._prev_centroid_marker_count = n
+        self._prev_bbox3d_marker_count = n
         self.get_logger().info(f"DONE")
         self.get_logger().warning(f"Took: {time()-t_start} seconds.")
         return det3d_msg, det2d_msg, image_with_boxes, centroid_markers, bbox3d_markers

@@ -18,7 +18,9 @@ def generate_launch_description():
                         "model_path": "/workspaces/stretch_dev/yolov4-tiny.weights",
                         "config_file": "/workspaces/darknet/cfg/yolov4-tiny.cfg",
                         "class_names_file": "/workspaces/darknet/cfg/coco.names",
-                        "publish_mask_topic": False,
+                        "max_bbox_volume_m3": 0.0,
+                        "max_distance_above_floor_m": 0.0,
+                        "floor_z_in_base_frame_m": 0.0,
                     }
                 ],
             )

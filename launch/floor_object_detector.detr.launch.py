@@ -16,7 +16,9 @@ def generate_launch_description():
                         "base_frame": "base_link",
                         "inference_backend": "detr",
                         "model_path": "facebook/detr-resnet-50",
-                        "publish_mask_topic": False,
+                        "max_bbox_volume_m3": 0.0,
+                        "max_distance_above_floor_m": 0.0,
+                        "floor_z_in_base_frame_m": 0.0,
                     }
                 ],
             )
