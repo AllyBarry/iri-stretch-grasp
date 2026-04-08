@@ -6,7 +6,6 @@ from visualization_msgs.msg import Marker
 
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 import rclpy.logging
 
 import time
@@ -144,7 +143,6 @@ class GraspPointNode(hm.HelloNode):
         marker.id = 0
         marker.type = Marker.ARROW
         marker.action = Marker.ADD
-        marker.lifetime = Duration(seconds=30.0).to_msg()
         marker.scale.x = 0.015
         marker.scale.y = 0.03
         marker.scale.z = 0.05

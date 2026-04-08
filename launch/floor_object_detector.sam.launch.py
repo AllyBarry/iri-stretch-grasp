@@ -20,6 +20,9 @@ def generate_launch_description():
                         "ram_model_path": "ram_plus_swin_large_14m.pth",
                         "ram_image_size": 384,
                         "ram_batch_size": 1,
+                        "max_bbox_volume_m3": 1.0,
+                        "max_distance_above_floor_m": 0.3,
+                        "floor_z_in_base_frame_m": 0.0,
                     }
                 ],
             )

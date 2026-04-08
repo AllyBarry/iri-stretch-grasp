@@ -9,20 +9,26 @@ from transformers import DetrForObjectDetection, DetrImageProcessor
 
 
 class Detection2D:
+    """Container for 2D detections.
+
+    boxes_xyxy stores bounding boxes in image pixel coordinates as
+    [x_min, y_min, x_max, y_max].
+    """
+
     def __init__(
         self,
         source_img: np.ndarray,
         ids: Optional[list] = None,
         id2label: Optional[dict] = None,
         scores: Optional[list] = None,
-        boxes: Optional[list] = None,
+        boxes_xyxy: Optional[list] = None,
         masks: Optional[list] = None,
     ):
         self.source_img = source_img
         self.ids = [] if ids is None else ids
         self.id2label = {} if id2label is None else dict(id2label)
         self.scores = [] if scores is None else scores
-        self.boxes = boxes
+        self.boxes_xyxy = boxes_xyxy
         self.masks = masks
 
     def add_detection(
@@ -37,8 +43,8 @@ class Detection2D:
         if label is not None:
             self.id2label[id] = label
         self.scores.append(score)
-        if box is not None and self.boxes is not None:
-            self.boxes.append(box)
+        if box is not None and self.boxes_xyxy is not None:
+            self.boxes_xyxy.append(box)
         if mask is not None and self.masks is not None:
             self.masks.append(mask)
 
@@ -49,9 +55,9 @@ class Detection2D:
 
         scores = self.scores if self.scores is not None else []
         ids = self.ids if self.ids is not None else []
-        boxes = self.boxes if self.boxes is not None else []
+        boxes_xyxy = self.boxes_xyxy if self.boxes_xyxy is not None else []
         masks = self.masks if self.masks is not None else []
-        num_detections = max(len(ids), len(scores), len(boxes), len(masks))
+        num_detections = max(len(ids), len(scores), len(boxes_xyxy), len(masks))
 
         img_h, img_w = image.shape[:2]
         alpha_num = 77
@@ -87,8 +93,8 @@ class Detection2D:
                                 // alpha_den
                             ).astype(np.uint8)
 
-            if i < len(boxes) and boxes[i] is not None:
-                box = np.asarray(boxes[i], dtype=np.float32).reshape(-1)
+            if i < len(boxes_xyxy) and boxes_xyxy[i] is not None:
+                box = np.asarray(boxes_xyxy[i], dtype=np.float32).reshape(-1)
                 if box.size >= 4:
                     x1, y1, x2, y2 = box[:4]
                     x1 = int(np.clip(np.floor(x1), 0, img_w - 1))
@@ -166,7 +172,7 @@ class OnnxRuntimeBackend(BaseInferenceBackend):
         self._logger = logger
 
     def infer(self, image: np.ndarray, threshold: float):
-        return Detection2D(source_img=image, boxes=[], masks=None)
+        return Detection2D(source_img=image, boxes_xyxy=[], masks=None)
 
 
 class DarkNetBackend(BaseInferenceBackend):
@@ -236,7 +242,7 @@ class DarkNetBackend(BaseInferenceBackend):
 
         scale_x = image.shape[1] / self.width
         scale_y = image.shape[0] / self.height
-        result = Detection2D(source_img=image, boxes=[], masks=None)
+        result = Detection2D(source_img=image, boxes_xyxy=[], masks=None)
         for label, confidence, (cx, cy, w, h) in detections:
             x1 = (cx - 0.5 * w) * scale_x
             y1 = (cy - 0.5 * h) * scale_y
@@ -284,7 +290,7 @@ class DetrBackend(BaseInferenceBackend):
             threshold=threshold,
         )[0]
 
-        det2d = Detection2D(source_img=image, boxes=[], masks=None)
+        det2d = Detection2D(source_img=image, boxes_xyxy=[], masks=None)
         for score, label, box in zip(
             results["scores"], results["labels"], results["boxes"]
         ):
@@ -349,7 +355,11 @@ class FastSamBackend(BaseInferenceBackend):
         masks = getattr(prediction, "masks", None)
         mask_data = None if masks is None or masks.data is None else masks.data.detach().cpu().numpy()
 
-        det2d = Detection2D(source_img=image, boxes=[], masks=[] if mask_data is not None else None)
+        det2d = Detection2D(
+            source_img=image,
+            boxes_xyxy=[],
+            masks=[] if mask_data is not None else None,
+        )
         if boxes is None or boxes.xyxy is None:
             return det2d
 
