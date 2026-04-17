@@ -103,7 +103,8 @@ class ManualScanClient(Node):
         for idx, det in enumerate(detections):
             p = det.centroid
             print(
-                f"{idx}: class='{det.class_name}' score={det.score:.3f} "
+                f"{idx}: object='{det.class_name}' detector='{det.detector_class_name}' "
+                f"pick_up='{det.pick_up}' grasp='{det.grasp_direction}' score={det.score:.3f} "
                 f"xyz=({p.x:.3f}, {p.y:.3f}, {p.z:.3f})"
             )
 
