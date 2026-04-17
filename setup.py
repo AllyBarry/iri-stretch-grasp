@@ -7,6 +7,10 @@ setup(
     name=package_name,
     version="0.0.1",
     packages=find_packages(exclude=["test"]),
+    install_requires=[
+        "setuptools",
+        "openai",
+    ],
     maintainer='Toni Gabas',
     maintainer_email='agabas@iri.upc.edu',
     entry_points={

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import base64
+import json
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time, Duration
@@ -15,7 +17,7 @@ import numpy as np
 import cv2
 from tf_transformations import quaternion_matrix
 from PIL import Image as PILImage
-from typing import Optional
+from typing import Any, Optional
 
 
 from stretch_floor_perception.msg import DetectedObject3D, DetectedObject3DArray
@@ -29,6 +31,39 @@ except ImportError:
 
 
 from stretch_floor_perception.inference_backends import Detection2D, InferenceBackend
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
+
+VLM_PROMPT = """
+You are looking at a cropped image containing one main object, taken from a robot camera.
+
+Answer these 3 questions about the main object in the crop:
+
+1. What is this object?
+2. Should a cleaning robot pick it up from the ground?
+3. Should the robot grasp it from the front (along the camera/view direction) or from the top down?
+
+Rules:
+- Focus only on the main visible object in the crop.
+- Be concise.
+- For the object name, use a short noun phrase with no article.
+  Good: "apple", "plastic bottle", "glass figure"
+  Bad: "an apple", "this looks like an apple", "a small plastic bottle"
+- For pickup, answer only: yes, no, or unsure
+- For grasp direction, answer only: front, top, or unsure
+- If the object is ambiguous, still give the best short label you can.
+- Output ONLY valid JSON in this exact format:
+
+{
+  "object": "<short object name>",
+  "pick_up": "yes|no|unsure",
+  "grasp": "front|top|unsure"
+}
+""".strip()
 
 
 class FloorObjectDetector(Node):
@@ -50,6 +85,13 @@ class FloorObjectDetector(Node):
         self.declare_parameter("max_bbox_volume_m3", 0.0)
         self.declare_parameter("max_distance_above_floor_m", 0.0)
         self.declare_parameter("floor_z_in_base_frame_m", 0.0)
+        self.declare_parameter("vlm_enabled", False)
+        self.declare_parameter("vlm_base_url", "http://127.0.0.1:8080/v1")
+        self.declare_parameter("vlm_api_key", "sk-no-key-required")
+        self.declare_parameter("vlm_model", "")
+        self.declare_parameter("vlm_prompt", VLM_PROMPT)
+        self.declare_parameter("vlm_temperature", 0.0)
+        self.declare_parameter("vlm_request_timeout_s", 30.0)
 
         self.image_with_boxes_pub = self.create_publisher(Image, "image_with_boxes", 10)
         self.centroid_pub = self.create_publisher(MarkerArray, "detected_centroids", 10)
@@ -59,7 +101,7 @@ class FloorObjectDetector(Node):
 
         self.img_bridge = CvBridge()
 
-        self._tf_buffer = Buffer() if Buffer is not None else None
+        self._tf_buffer = Buffer(cache_time=Duration(seconds=30.0)) if Buffer is not None else None
         self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True) if self._tf_buffer else None
 
         self.inference_backend = InferenceBackend(
@@ -77,17 +119,54 @@ class FloorObjectDetector(Node):
         self.service = self.create_service(
             DetectFloorObjects3D, "detect_floor_objects_3d", self._handle_detect_service
         )
+        self._vlm_enabled = bool(self.get_parameter("vlm_enabled").value)
+        self._vlm_prompt = str(self.get_parameter("vlm_prompt").value).strip() or VLM_PROMPT
+        self._vlm_model = str(self.get_parameter("vlm_model").value).strip()
+        self._vlm_temperature = float(self.get_parameter("vlm_temperature").value)
+        self._vlm_timeout_s = float(self.get_parameter("vlm_request_timeout_s").value)
+        self._vlm_client = self._build_vlm_client() if self._vlm_enabled else None
 
-    def _to_detection2d_array_msg(self, detections: Detection2D, header: Header) -> Detection2DArray:
+    def _build_vlm_client(self):
+        if not self._vlm_enabled:
+            return None
+        if OpenAI is None:
+            raise RuntimeError("VLM support requires the 'openai' Python package.")
+        if not self._vlm_model:
+            raise ValueError("Parameter 'vlm_model' must be set when 'vlm_enabled' is true.")
+
+        base_url = str(self.get_parameter("vlm_base_url").value).strip()
+        api_key = str(self.get_parameter("vlm_api_key").value).strip() or "sk-no-key-required"
+        self.get_logger().info(
+            f"VLM enabled. Using model '{self._vlm_model}' via {base_url}"
+        )
+        return OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=self._vlm_timeout_s,
+        )
+
+    def _to_detection2d_array_msg(
+        self,
+        detections: Detection2D,
+        header: Header,
+        vlm_annotations: Optional[list[Optional[dict[str, str]]]] = None,
+    ) -> tuple[Detection2DArray, list[dict[str, Any]]]:
         det2d_msg = Detection2DArray()
         det2d_msg.header = header
+        metadata = []
 
         boxes_xyxy = detections.boxes_xyxy if detections.boxes_xyxy is not None else []
         ids = detections.ids if detections.ids is not None else []
         id2label = detections.id2label if detections.id2label is not None else {}
         scores = detections.scores if detections.scores is not None else []
 
-        for box, class_id, score in zip(boxes_xyxy, ids, scores):
+        num_detections = max(len(boxes_xyxy), len(ids), len(scores))
+        for idx in range(num_detections):
+            if idx >= len(boxes_xyxy):
+                continue
+            box = boxes_xyxy[idx]
+            class_id = ids[idx] if idx < len(ids) else idx
+            score = scores[idx] if idx < len(scores) else 0.0
             box_np = np.asarray(box, dtype=np.float32).reshape(-1)
             if box_np.size < 4:
                 continue
@@ -101,12 +180,19 @@ class FloorObjectDetector(Node):
             det.bbox.size_y = float(ymax - ymin)
 
             result = ObjectHypothesisWithPose()
-            result.hypothesis.class_id = str(id2label.get(class_id, class_id))
+            detector_class_name = str(id2label.get(class_id, class_id))
+            result.hypothesis.class_id = detector_class_name
             result.hypothesis.score = float(score)
             det.results = [result]
             det2d_msg.detections.append(det)
+            metadata.append(
+                {
+                    "detector_class_name": detector_class_name,
+                    "vlm": None if vlm_annotations is None or idx >= len(vlm_annotations) else vlm_annotations[idx],
+                }
+            )
 
-        return det2d_msg
+        return det2d_msg, metadata
 
     def _pad_to_center_square(self, image: np.ndarray) -> tuple[np.ndarray, int, int]:
         height, width = image.shape[:2]
@@ -193,10 +279,23 @@ class FloorObjectDetector(Node):
     def _identity_quaternion(self) -> Quaternion:
         return Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
 
-    def _make_detectedobject3d_msg(self, header, class_id, score, centroid, size) -> DetectedObject3D:
+    def _make_detectedobject3d_msg(
+        self,
+        header,
+        class_id,
+        detector_class_name,
+        pick_up,
+        grasp_direction,
+        score,
+        centroid,
+        size,
+    ) -> DetectedObject3D:
         det3d = DetectedObject3D()
         det3d.header = header
         det3d.class_name = class_id
+        det3d.detector_class_name = detector_class_name
+        det3d.pick_up = pick_up
+        det3d.grasp_direction = grasp_direction
         det3d.score = score
         det3d.centroid = Point(x=float(centroid[0]), y=float(centroid[1]), z=float(centroid[2]))
         bbox = BoundingBox3D()
@@ -218,6 +317,111 @@ class FloorObjectDetector(Node):
         if centroid_xyz.size < 3 or size_xyz.size < 3:
             return float("inf")
         return float(centroid_xyz[2] - 0.5 * max(float(size_xyz[2]), 0.0))
+
+    def _crop_bbox_image(self, image: np.ndarray, box: np.ndarray) -> Optional[np.ndarray]:
+        if image.size == 0:
+            return None
+        img_h, img_w = image.shape[:2]
+        box_np = np.asarray(box, dtype=np.float32).reshape(-1)
+        if box_np.size < 4:
+            return None
+
+        x1, y1, x2, y2 = box_np[:4]
+        x1 = int(np.clip(np.floor(x1), 0, img_w - 1))
+        y1 = int(np.clip(np.floor(y1), 0, img_h - 1))
+        x2 = int(np.clip(np.ceil(x2), 0, img_w))
+        y2 = int(np.clip(np.ceil(y2), 0, img_h))
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        crop = image[y1:y2, x1:x2]
+        return None if crop.size == 0 else crop
+
+    def _encode_image_as_data_url(
+        self,
+        image_rgb: np.ndarray,
+        mime_type: str = "image/jpeg",
+    ) -> str:
+        encode_ext = ".jpg" if mime_type == "image/jpeg" else ".png"
+        image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+        success, encoded = cv2.imencode(encode_ext, image_bgr)
+        if not success:
+            raise RuntimeError("Failed to encode crop for VLM request.")
+        b64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
+        return f"data:{mime_type};base64,{b64}"
+
+    def _sanitize_vlm_response(self, text: str) -> dict[str, str]:
+        candidate = text.strip()
+        if candidate.startswith("```"):
+            lines = [line for line in candidate.splitlines() if not line.strip().startswith("```")]
+            candidate = "\n".join(lines).strip()
+
+        data = json.loads(candidate)
+        obj = str(data.get("object", "")).strip() or "unknown"
+        pick_up = str(data.get("pick_up", "unsure")).strip().lower()
+        grasp = str(data.get("grasp", "unsure")).strip().lower()
+
+        if pick_up not in {"yes", "no", "unsure"}:
+            pick_up = "unsure"
+        if grasp not in {"front", "top", "unsure"}:
+            grasp = "unsure"
+
+        return {
+            "object": obj,
+            "pick_up": pick_up,
+            "grasp": grasp,
+        }
+
+    def _ask_vlm_about_crop(self, crop_rgb: np.ndarray) -> dict[str, str]:
+        if self._vlm_client is None:
+            raise RuntimeError("VLM client is not configured.")
+
+        image_data_url = self._encode_image_as_data_url(crop_rgb)
+        response = self._vlm_client.chat.completions.create(
+            model=self._vlm_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": self._vlm_prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            ],
+            temperature=self._vlm_temperature,
+            response_format={"type": "json_object"},
+        )
+
+        text = response.choices[0].message.content
+        self.get_logger().info(text)  # DEBUG
+        if isinstance(text, list):
+            text = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in text
+            )
+        return self._sanitize_vlm_response(str(text))
+
+    def _annotate_detections_with_vlm(
+        self,
+        detections: Detection2D,
+    ) -> list[Optional[dict[str, str]]]:
+        boxes_xyxy = detections.boxes_xyxy if detections.boxes_xyxy is not None else []
+        annotations: list[Optional[dict[str, str]]] = [None] * len(boxes_xyxy)
+        if self._vlm_client is None:
+            return annotations
+
+        for idx, box in enumerate(boxes_xyxy):
+            crop = self._crop_bbox_image(detections.source_img, box)
+            if crop is None:
+                self.get_logger().warning(f"Skipping VLM call for detection {idx}: empty crop.")
+                continue
+            try:
+                annotations[idx] = self._ask_vlm_about_crop(crop)
+            except Exception as exc:
+                self.get_logger().warning(
+                    f"VLM request failed for detection {idx}: {exc}"
+                )
+        return annotations
 
     def _passes_3d_filters(
         self,
@@ -280,7 +484,7 @@ class FloorObjectDetector(Node):
         det3d_msg = DetectedObject3DArray()
         det3d_msg.header = Header()
         if stamp is not None:
-            det3d_msg.header.stamp = stamp
+            det3d_msg.header.stamp = Time() #stamp   # TODO Fix. Setting to zero because timestamp is too old for rviz
         if frame_id is not None:
             det3d_msg.header.frame_id = frame_id
         det3d_msg.detections = []
@@ -291,6 +495,7 @@ class FloorObjectDetector(Node):
             request.color_msg, request.depth_msg, request.info_msg
         )
         response.detections = det3d_msg
+
         if image_with_boxes is not None:
             if isinstance(image_with_boxes, PILImage.Image):
                 image_with_boxes = np.array(image_with_boxes)
@@ -346,7 +551,12 @@ class FloorObjectDetector(Node):
 
         detections = self.inference_backend.infer(color_img, threshold=0.85)
         self.get_logger().info("Got inference result")
-        det2d_msg = self._to_detection2d_array_msg(detections, color_msg.header)
+        vlm_annotations = self._annotate_detections_with_vlm(detections)
+        det2d_msg, det2d_metadata = self._to_detection2d_array_msg(
+            detections,
+            color_msg.header,
+            vlm_annotations=vlm_annotations,
+        )
         image_with_boxes = detections.result_image()
         det2d_msg.header = color_msg.header
 
@@ -370,7 +580,7 @@ class FloorObjectDetector(Node):
             return self._empty_det3d_msg(det3d_msg.header.stamp, det3d_msg.header.frame_id), det2d_msg, image_with_boxes, None, None
         try:
             transform = self._tf_buffer.lookup_transform(
-                base_frame, camera_frame, Time.from_msg(depth_msg.header.stamp), timeout=Duration(seconds=1.0)
+                base_frame, camera_frame, rclpy.time.Time(), timeout=Duration(seconds=1.0)
             )
         except Exception as exc:
             self.get_logger().warning(f"TF lookup failed: {exc}")
@@ -393,11 +603,31 @@ class FloorObjectDetector(Node):
         )
 
         n=0
-        for det in det2d_msg.detections:
+        for det_idx, det in enumerate(det2d_msg.detections):
             if not det.results:
                 continue
             best = max(det.results, key=lambda r: r.hypothesis.score)
-            class_id = best.hypothesis.class_id
+            detector_class_name = best.hypothesis.class_id
+            vlm_annotation = (
+                det2d_metadata[det_idx].get("vlm")
+                if det_idx < len(det2d_metadata)
+                else None
+            )
+            class_id = (
+                vlm_annotation.get("object", detector_class_name)
+                if vlm_annotation is not None
+                else detector_class_name
+            )
+            pick_up = (
+                vlm_annotation.get("pick_up", "unsure")
+                if vlm_annotation is not None
+                else "unsure"
+            )
+            grasp_direction = (
+                vlm_annotation.get("grasp", "unsure")
+                if vlm_annotation is not None
+                else "unsure"
+            )
             score = float(best.hypothesis.score)
 
             cx_pix = det.bbox.center.position.x - pad_left
@@ -429,7 +659,16 @@ class FloorObjectDetector(Node):
             ):
                 continue
 
-            det3d = self._make_detectedobject3d_msg(det3d_msg.header, class_id, score, centroid, size)
+            det3d = self._make_detectedobject3d_msg(
+                det3d_msg.header,
+                class_id,
+                detector_class_name,
+                pick_up,
+                grasp_direction,
+                score,
+                centroid,
+                size,
+            )
             det3d_msg.detections.append(det3d)
             centroid_marker = self._make_marker(
                 det3d_msg.header,
