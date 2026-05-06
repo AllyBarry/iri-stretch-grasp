@@ -27,7 +27,7 @@ class TopdownGraspPointNode(GraspPointNode):
         self.min_object_points = 60
         self.prealign_lift_m = 0.85
         self.initial_wrist_extension_m = 0.12
-        self.topdown_wrist_pitch_rad = -math.pi / 2.0
+        self.topdown_wrist_pitch_rad = (-math.pi / 2.0) + 0.05
         self.topdown_wrist_roll_rad = 0.0
         self.topdown_hover_above_object_m = 0.05
         self.topdown_floor_clearance_m = 0.015
@@ -362,8 +362,7 @@ class TopdownGraspPointNode(GraspPointNode):
             self.logger.info('Open the gripper slightly to avoid overtorquing.')
             self.debug_move_to_pose({'gripper_aperture': 0.005})
 
-            self.logger.info('Retract the wrist and restore the wrist orientation.')
-            self.debug_move_to_pose({'wrist_extension': 0.01})
+            self.logger.info('Restore the wrist orientation before retracting.')
             self.debug_move_to_pose(
                 {
                     'joint_wrist_pitch': 0.0,
@@ -371,6 +370,8 @@ class TopdownGraspPointNode(GraspPointNode):
                     'joint_wrist_yaw': 0.0,
                 }
             )
+            self.logger.info('Retract the wrist.')
+            self.debug_move_to_pose({'wrist_extension': 0.01})
 
             self._clear_translation_marker()
             response.success = True
