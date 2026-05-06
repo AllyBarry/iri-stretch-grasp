@@ -37,16 +37,17 @@ class TopdownGraspPointNode(GraspPointNode):
         self.min_elongation_ratio = 1.35
 
     def _transform_points(self, points_xyz, source_frame, target_frame):
+        points_xyz = np.asarray(points_xyz, dtype=float)
+        if points_xyz.ndim == 1:
+            points_xyz = points_xyz.reshape(1, 3)
+
         if source_frame == target_frame:
-            return np.asarray(points_xyz, dtype=float)
+            return points_xyz
 
         transform_mat, _ = hm.get_p1_to_p2_matrix(source_frame, target_frame, self.tf2_buffer)
         if transform_mat is None:
             return None
 
-        points_xyz = np.asarray(points_xyz, dtype=float)
-        if points_xyz.ndim == 1:
-            points_xyz = points_xyz.reshape(1, 3)
         homogeneous = np.concatenate(
             [points_xyz, np.ones((points_xyz.shape[0], 1), dtype=float)],
             axis=1,
