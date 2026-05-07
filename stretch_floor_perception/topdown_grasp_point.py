@@ -168,11 +168,8 @@ class TopdownGraspPointNode(GraspPointNode):
         top_z = float(np.percentile(object_points[:, 2], 95.0))
         centroid_z = float(np.mean(object_points[:, 2]))
         target_z = float(target_base[2])
-        grasp_tip_z = max(
-            floor_z + self.topdown_floor_clearance_m,
-            min(target_z, top_z - self.topdown_below_top_m),
-        )
-        hover_tip_z = max(top_z + self.topdown_hover_above_object_m, grasp_tip_z + 0.03)
+        grasp_tip_z = max(target_z, floor_z + self.topdown_floor_clearance_m)
+        hover_tip_z = grasp_tip_z + max(self.topdown_hover_above_object_m, 0.03)
 
         return {
             'center_xy': center_xy,
@@ -254,12 +251,13 @@ class TopdownGraspPointNode(GraspPointNode):
 
             self.stow_the_robot()
 
-            manip = self.look_at_surface(scan_time_s=self.scan_time_s)
-            if manip is None:
-                self.logger.error('Failed to build manipulation view.')
-                response.success = False
-                response.message = 'Failed to build manipulation view.'
-                return response
+            ## TODO delete unnecesary for topdown.
+            #manip = self.look_at_surface(scan_time_s=self.scan_time_s)
+            #if manip is None:
+            #    self.logger.error('Failed to build manipulation view.')
+            #    response.success = False
+            #    response.message = 'Failed to build manipulation view.'
+            #    return response
 
             target_base, local_points_base = self._collect_local_points_in_base_frame(msg)
             if target_base is None:
@@ -312,7 +310,7 @@ class TopdownGraspPointNode(GraspPointNode):
             self.logger.info('Rotate the wrist yaw to align with the object long axis.')
             self.debug_move_to_pose({'joint_wrist_yaw': topdown_yaw})
 
-            hover_pose = self._compute_hover_pose(footprint['center_xy'], footprint['hover_tip_z'])
+            hover_pose = self._compute_hover_pose(target_base[:2], footprint['hover_tip_z'])
             if hover_pose is None:
                 self.logger.error('Unable to compute the hover pose for top-down grasping.')
                 response.success = False
@@ -325,7 +323,7 @@ class TopdownGraspPointNode(GraspPointNode):
             hover_lift_m = max(hover_lift_m, min_lift_m)
             hover_lift_m = min(hover_lift_m, max_lift_m)
 
-            self.logger.info('Move the gripper center above the target object.')
+            self.logger.info('Move the gripper above the requested grasp point.')
             self.debug_move_to_pose(
                 {
                     'translate_mobile_base': hover_base_delta_m,
