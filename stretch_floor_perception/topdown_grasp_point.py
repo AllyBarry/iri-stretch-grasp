@@ -27,13 +27,13 @@ class TopdownGraspPointNode(GraspPointNode):
         self.min_object_points = 60
         self.prealign_lift_m = 0.85
         self.initial_wrist_extension_m = 0.12
-        self.topdown_wrist_pitch_rad = (-math.pi / 2.0) + 0.05
-        self.topdown_wrist_roll_rad = 0.0
-        self.topdown_hover_above_object_m = 0.05
-        self.topdown_floor_clearance_m = 0.015
+        self.topdown_wrist_pitch_rad = (-math.pi / 2.0) + 0.07
+        self.topdown_wrist_yaw_rad = 0.0
+        self.topdown_hover_above_object_m = 0.35
+        self.topdown_floor_clearance_m = 0.025
         self.topdown_below_top_m = 0.01
         self.object_lift_height_m = 0.10
-        self.yaw_axis_offset_rad = 0.0
+        self.roll_axis_offset_rad = 0.0
         self.min_elongation_ratio = 1.35
 
     def _transform_points(self, points_xyz, source_frame, target_frame):
@@ -168,7 +168,7 @@ class TopdownGraspPointNode(GraspPointNode):
         top_z = float(np.percentile(object_points[:, 2], 95.0))
         centroid_z = float(np.mean(object_points[:, 2]))
         target_z = float(target_base[2])
-        grasp_tip_z = max(target_z, floor_z + self.topdown_floor_clearance_m)
+        grasp_tip_z = max(target_z, self.topdown_floor_clearance_m)
         hover_tip_z = grasp_tip_z + max(self.topdown_hover_above_object_m, 0.03)
 
         return {
@@ -185,18 +185,18 @@ class TopdownGraspPointNode(GraspPointNode):
             'elongation_ratio': elongation_ratio,
         }
 
-    def _compute_topdown_yaw(self, major_axis_xy):
+    def _compute_topdown_roll(self, major_axis_xy):
         axis_xy = np.asarray(major_axis_xy, dtype=float)
-        yaw = math.atan2(float(axis_xy[1]), float(axis_xy[0])) + float(self.yaw_axis_offset_rad)
-        yaw = math.atan2(math.sin(yaw), math.cos(yaw))
+        roll = math.atan2(float(axis_xy[1]), float(axis_xy[0])) + float(self.roll_axis_offset_rad)
+        roll = math.atan2(math.sin(roll), math.cos(roll))
 
         # Top-down finger alignment is symmetric under pi rotation, so choose
-        # the nearest equivalent angle within the typical wrist yaw range.
-        if yaw > (math.pi / 2.0):
-            yaw -= math.pi
-        elif yaw < (-math.pi / 2.0):
-            yaw += math.pi
-        return yaw
+        # the nearest equivalent angle within the typical wrist roll range.
+        if roll > (math.pi / 2.0):
+            roll -= math.pi
+        elif roll < (-math.pi / 2.0):
+            roll += math.pi
+        return roll
 
     def _compute_hover_pose(self, target_xy, hover_tip_z):
         tip_base = self._get_gripper_tip_in_frame('base_link')
@@ -252,12 +252,12 @@ class TopdownGraspPointNode(GraspPointNode):
             self.stow_the_robot()
 
             ## TODO delete unnecesary for topdown.
-            #manip = self.look_at_surface(scan_time_s=self.scan_time_s)
-            #if manip is None:
-            #    self.logger.error('Failed to build manipulation view.')
-            #    response.success = False
-            #    response.message = 'Failed to build manipulation view.'
-            #    return response
+            manip = self.look_at_surface(scan_time_s=self.scan_time_s)
+            if manip is None:
+                self.logger.error('Failed to build manipulation view.')
+                response.success = False
+                response.message = 'Failed to build manipulation view.'
+                return response
 
             target_base, local_points_base = self._collect_local_points_in_base_frame(msg)
             if target_base is None:
@@ -273,7 +273,7 @@ class TopdownGraspPointNode(GraspPointNode):
                 response.message = 'Unable to estimate a local object footprint for top-down grasping.'
                 return response
 
-            topdown_yaw = self._compute_topdown_yaw(footprint['major_axis_xy'])
+            topdown_roll = self._compute_topdown_roll(footprint['major_axis_xy'])
             self.logger.info(
                 'Estimated top-down grasp footprint: '
                 f'elongated={footprint["elongated"]} '
@@ -281,7 +281,7 @@ class TopdownGraspPointNode(GraspPointNode):
                 f'major={footprint["major_length_m"]:.3f} m '
                 f'minor={footprint["minor_length_m"]:.3f} m '
                 f'top_z={footprint["top_z"]:.3f} m '
-                f'grasp_yaw={topdown_yaw:.3f} rad'
+                f'grasp_roll={topdown_roll:.3f} rad'
             )
 
             max_lift_m = 1.09
@@ -303,12 +303,12 @@ class TopdownGraspPointNode(GraspPointNode):
             self.debug_move_to_pose(
                 {
                     'joint_wrist_pitch': float(self.topdown_wrist_pitch_rad),
-                    'joint_wrist_roll': float(self.topdown_wrist_roll_rad),
+                    'joint_wrist_yaw': float(self.topdown_wrist_yaw_rad),
                 }
             )
 
-            self.logger.info('Rotate the wrist yaw to align with the object long axis.')
-            self.debug_move_to_pose({'joint_wrist_yaw': topdown_yaw})
+            self.logger.info('Rotate the wrist roll to align with the object long axis.')
+            self.debug_move_to_pose({'joint_wrist_roll': topdown_roll})
 
             hover_pose = self._compute_hover_pose(target_base[:2], footprint['hover_tip_z'])
             if hover_pose is None:
@@ -333,7 +333,7 @@ class TopdownGraspPointNode(GraspPointNode):
             )
 
             self.logger.info('Open the gripper before the vertical descent.')
-            self.debug_move_to_pose({'gripper_aperture': 0.07})
+            self.debug_move_to_pose({'gripper_aperture': 0.77})
 
             grasp_lift_m = self._compute_lift_for_tip_height(footprint['grasp_tip_z'])
             if grasp_lift_m is None:
@@ -406,13 +406,13 @@ class TopdownGraspPointNode(GraspPointNode):
         self.declare_parameter('min_object_points', 60)
         self.declare_parameter('prealign_lift_m', 0.85)
         self.declare_parameter('initial_wrist_extension_m', 0.12)
-        self.declare_parameter('topdown_wrist_pitch_rad', -math.pi / 2.0)
-        self.declare_parameter('topdown_wrist_roll_rad', 0.0)
-        self.declare_parameter('topdown_hover_above_object_m', 0.05)
-        self.declare_parameter('topdown_floor_clearance_m', 0.015)
+        self.declare_parameter('topdown_wrist_pitch_rad', -math.pi / 2.0 + 0.07)
+        self.declare_parameter('topdown_wrist_yaw_rad', 0.0)
+        self.declare_parameter('topdown_hover_above_object_m', 0.35)
+        self.declare_parameter('topdown_floor_clearance_m', 0.025)
         self.declare_parameter('topdown_below_top_m', 0.01)
         self.declare_parameter('object_lift_height_m', 0.10)
-        self.declare_parameter('yaw_axis_offset_rad', 0.0)
+        self.declare_parameter('roll_axis_offset_rad', 0.0)
         self.declare_parameter('min_elongation_ratio', 1.35)
 
         self.debug_directory = self.get_parameter('debug_directory').value
@@ -432,7 +432,7 @@ class TopdownGraspPointNode(GraspPointNode):
         self.prealign_lift_m = float(self.get_parameter('prealign_lift_m').value)
         self.initial_wrist_extension_m = float(self.get_parameter('initial_wrist_extension_m').value)
         self.topdown_wrist_pitch_rad = float(self.get_parameter('topdown_wrist_pitch_rad').value)
-        self.topdown_wrist_roll_rad = float(self.get_parameter('topdown_wrist_roll_rad').value)
+        self.topdown_wrist_yaw_rad = float(self.get_parameter('topdown_wrist_yaw_rad').value)
         self.topdown_hover_above_object_m = float(
             self.get_parameter('topdown_hover_above_object_m').value
         )
@@ -441,7 +441,7 @@ class TopdownGraspPointNode(GraspPointNode):
         )
         self.topdown_below_top_m = float(self.get_parameter('topdown_below_top_m').value)
         self.object_lift_height_m = float(self.get_parameter('object_lift_height_m').value)
-        self.yaw_axis_offset_rad = float(self.get_parameter('yaw_axis_offset_rad').value)
+        self.roll_axis_offset_rad = float(self.get_parameter('roll_axis_offset_rad').value)
         self.min_elongation_ratio = float(self.get_parameter('min_elongation_ratio').value)
 
         self.joint_states_subscriber = self.create_subscription(
