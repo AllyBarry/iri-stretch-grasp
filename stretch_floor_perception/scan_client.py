@@ -22,6 +22,7 @@ class ManualScanClient(Node):
         self.declare_parameter("camera_info_topic", "/camera/color/camera_info")
         self.declare_parameter("service_name", "detect_floor_objects_3d")
         self.declare_parameter("grasp_service_name", "/grasp_point")
+        self.declare_parameter("topdown_grasp_service_name", "/topdown_grasp_point")
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -52,6 +53,17 @@ class ManualScanClient(Node):
         self.get_logger().info(f"Waiting for service '{grasp_service_name}'...")
         self._grasp_client.wait_for_service()
         self.get_logger().info("Grasp service available.")
+
+        topdown_grasp_service_name = self.get_parameter("topdown_grasp_service_name").value
+        self._topdown_grasp_client = self.create_client(GraspPoint, topdown_grasp_service_name)
+        if self._topdown_grasp_client.wait_for_service(timeout_sec=0.5):
+            self.get_logger().info(
+                f"Top-down grasp service '{topdown_grasp_service_name}' is available."
+            )
+        else:
+            self.get_logger().warning(
+                f"Top-down grasp service '{topdown_grasp_service_name}' is not available yet."
+            )
 
     def _on_color(self, msg: CompressedImage):
         with self._lock:
@@ -135,11 +147,26 @@ class ManualScanClient(Node):
         return None
 
     def _call_grasp_point(self, detection) -> None:
+        grasp_direction = str(detection.grasp_direction).strip().lower()
+        if grasp_direction == "top":
+            client = self._topdown_grasp_client
+            service_name = self.get_parameter("topdown_grasp_service_name").value
+        else:
+            client = self._grasp_client
+            service_name = self.get_parameter("grasp_service_name").value
+
+        if not client.wait_for_service(timeout_sec=2.0):
+            print(f"Selected grasp service '{service_name}' is unavailable.")
+            return
+
         request = GraspPoint.Request()
         request.target.header = detection.header
         request.target.point = detection.centroid
 
-        future = self._grasp_client.call_async(request)
+        print(
+            f"Calling grasp service '{service_name}' for grasp_direction='{grasp_direction or 'unsure'}'."
+        )
+        future = client.call_async(request)
         while rclpy.ok() and not future.done():
             time.sleep(0.05)
 
