@@ -55,6 +55,8 @@ Rules:
   Bad: "an apple", "this looks like an apple", "a small plastic bottle"
 - For pickup, answer only: yes, no, or unsure
 - For grasp direction, answer only: front, top, or unsure
+- Tall vertical objects should be grasp from the front (e.g. bottle, cup)
+- Short elongated objects shold be grasp from the top (e.g. pen, coffee box)
 - If the object is ambiguous, still give the best short label you can.
 - Output ONLY valid JSON in this exact format:
 
