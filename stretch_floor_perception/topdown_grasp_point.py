@@ -357,19 +357,7 @@ class TopdownGraspPointNode(GraspPointNode):
             self.logger.info('Lift the object after grasping.')
             self.debug_move_to_pose({'joint_lift': lift_with_object_m})
 
-            self.logger.info('Open the gripper slightly to avoid overtorquing.')
-            self.debug_move_to_pose({'gripper_aperture': 0.005})
-
-            self.logger.info('Restore the wrist orientation before retracting.')
-            self.debug_move_to_pose(
-                {
-                    'joint_wrist_pitch': 0.0,
-                    'joint_wrist_roll': 0.0,
-                    'joint_wrist_yaw': 0.0,
-                }
-            )
-            self.logger.info('Retract the wrist.')
-            self.debug_move_to_pose({'wrist_extension': 0.01})
+            self._handoff_object_to_user(0.77)
 
             self._clear_translation_marker()
             response.success = True
@@ -399,6 +387,8 @@ class TopdownGraspPointNode(GraspPointNode):
         self.declare_parameter('grasp_service', '/topdown_grasp_point')
         self.declare_parameter('dryrun', False)
         self.declare_parameter('debug_mode', False)
+        self.declare_parameter('handoff_release_wait_s', 2.0)
+        self.declare_parameter('stow_after_handoff', False)
         self.declare_parameter('object_cluster_radius_m', 0.12)
         self.declare_parameter('object_vertical_window_m', 0.20)
         self.declare_parameter('min_object_height_above_floor_m', 0.01)
@@ -422,6 +412,8 @@ class TopdownGraspPointNode(GraspPointNode):
 
         self.dryrun = self.get_parameter('dryrun').value
         self.debug_mode = bool(self.get_parameter('debug_mode').value)
+        self.handoff_release_wait_s = float(self.get_parameter('handoff_release_wait_s').value)
+        self.stow_after_handoff = bool(self.get_parameter('stow_after_handoff').value)
         self.object_cluster_radius_m = float(self.get_parameter('object_cluster_radius_m').value)
         self.object_vertical_window_m = float(self.get_parameter('object_vertical_window_m').value)
         self.min_object_height_above_floor_m = float(

@@ -12,6 +12,7 @@ import time
 import threading
 import numpy as np
 import os
+import sys
 
 import hello_helpers.hello_misc as hm
 import stretch_funmap.navigate as nv
@@ -39,6 +40,8 @@ class GraspPointNode(hm.HelloNode):
         self.debug_mode = False
         self.debug_marker_pub = None
         self.debug_prompt_lock = threading.Lock()
+        self.handoff_release_wait_s = 2.0
+        self.stow_after_handoff = False
 
     def joint_states_callback(self, joint_states):
         with self.joint_states_lock:
@@ -210,6 +213,41 @@ class GraspPointNode(hm.HelloNode):
         self._confirm_motion(self._describe_move(description=description, forward_m=forward_m), forward_m=forward_m)
         self.drive(forward_m)
 
+    def _wait_for_handoff_confirmation(self):
+        if self.dryrun:
+            return
+
+        self.logger.info('Waiting for the user to press Enter before releasing the object.')
+        if not sys.stdin or not sys.stdin.isatty():
+            self.logger.warn(
+                'Standard input is not interactive, so proceeding with the handoff without waiting for a key press.'
+            )
+            return
+
+        try:
+            with self.debug_prompt_lock:
+                input('Press Enter to hand the object to the user...')
+        except EOFError:
+            self.logger.warn(
+                'Unable to read a handoff confirmation from standard input, so proceeding with the release.'
+            )
+
+    def _handoff_object_to_user(self, gripper_aperture):
+        self._wait_for_handoff_confirmation()
+
+        self.logger.info('Open the gripper to hand the object to the user.')
+        self.debug_move_to_pose({'gripper_aperture': float(gripper_aperture)})
+
+        if self.handoff_release_wait_s > 0.0:
+            self.logger.info(
+                f'Waiting {self.handoff_release_wait_s:.1f} seconds before stowing the robot.'
+            )
+            time.sleep(self.handoff_release_wait_s)
+
+        if self.stow_after_handoff:
+            self.logger.info('Stow the robot after the handoff.')
+            self.stow_the_robot()
+
     def grasp_point_service_callback(self, request, response):
         try:
             msg = request.target
@@ -345,14 +383,7 @@ class GraspPointNode(hm.HelloNode):
             lift_m = min(lift_m, max_lift_m)
             self.debug_move_to_pose({'joint_lift': lift_m})
 
-            self.logger.info('Open the gripper a little to avoid overtorquing and overheating the gripper motor.')
-            self.debug_move_to_pose({'gripper_aperture': gripper_aperture_m + 0.005})
-
-            self.logger.info('Retract the tool.')
-            self.debug_move_to_pose({'wrist_extension': 0.01})
-
-            self.logger.info('Reorient the wrist.')
-            self.debug_move_to_pose({'joint_wrist_yaw': 0.0})
+            self._handoff_object_to_user(0.07)
 
             self._clear_translation_marker()
             response.success = True
@@ -377,6 +408,8 @@ class GraspPointNode(hm.HelloNode):
         self.declare_parameter('grasp_service', '/grasp_point')
         self.declare_parameter('dryrun', False)
         self.declare_parameter('debug_mode', False)
+        self.declare_parameter('handoff_release_wait_s', 2.0)
+        self.declare_parameter('stow_after_handoff', False)
 
         self.debug_directory = self.get_parameter('debug_directory').value
         self.assumed_width_m = float(self.get_parameter('assumed_width_m').value)
@@ -385,6 +418,8 @@ class GraspPointNode(hm.HelloNode):
 
         self.dryrun = self.get_parameter('dryrun').value
         self.debug_mode = bool(self.get_parameter('debug_mode').value)
+        self.handoff_release_wait_s = float(self.get_parameter('handoff_release_wait_s').value)
+        self.stow_after_handoff = bool(self.get_parameter('stow_after_handoff').value)
 
         self.joint_states_subscriber = self.create_subscription(
             JointState, '/stretch/joint_states', callback=self.joint_states_callback, qos_profile=1, callback_group=self.callback_group)
