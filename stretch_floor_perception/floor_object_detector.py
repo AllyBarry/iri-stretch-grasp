@@ -85,7 +85,7 @@ class FloorObjectDetector(Node):
         self.declare_parameter("publish_mask_topic", False)
         self.declare_parameter("mask_topic", "~/mask")
         self.declare_parameter("max_bbox_volume_m3", 0.0)
-        self.declare_parameter("max_distance_above_floor_m", 0.0)
+        self.declare_parameter("max_distance_above_floor_m", 0.3)
         self.declare_parameter("floor_z_in_base_frame_m", 0.0)
         self.declare_parameter("vlm_enabled", False)
         self.declare_parameter("vlm_base_url", "http://127.0.0.1:8080/v1")

@@ -48,5 +48,10 @@ else
     tmux new-window -t "$SESSION:7" -n "Scan"
     tmux send-keys -t "$SESSION:Scan" "ros2 run stretch_iri_navigation explore_node.py"
 
+    # WINDOW 8: TTS Server
+    tmux new-window -t "$SESSION:8" -n "TTS"
+    tmux send-keys -t "$SESSION:TTS" "ros2 run sound_play soundplay_node.py C-m"
+
+
     tmux attach-session -t "$SESSION:1"
 fi
