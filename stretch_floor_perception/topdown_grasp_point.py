@@ -388,7 +388,7 @@ class TopdownGraspPointNode(GraspPointNode):
         self.declare_parameter('dryrun', False)
         self.declare_parameter('debug_mode', False)
         self.declare_parameter('handoff_release_wait_s', 2.0)
-        self.declare_parameter('stow_after_handoff', False)
+        self.declare_parameter('stow_after_handoff', True)
         self.declare_parameter('object_cluster_radius_m', 0.12)
         self.declare_parameter('object_vertical_window_m', 0.20)
         self.declare_parameter('min_object_height_above_floor_m', 0.01)

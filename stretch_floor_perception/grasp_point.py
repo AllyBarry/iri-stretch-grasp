@@ -41,7 +41,7 @@ class GraspPointNode(hm.HelloNode):
         self.debug_marker_pub = None
         self.debug_prompt_lock = threading.Lock()
         self.handoff_release_wait_s = 2.0
-        self.stow_after_handoff = False
+        self.stow_after_handoff = True
 
     def joint_states_callback(self, joint_states):
         with self.joint_states_lock:
