@@ -274,6 +274,9 @@ class TopdownGraspPointNode(GraspPointNode):
                 return response
 
             topdown_roll = self._compute_topdown_roll(footprint['major_axis_xy'])
+            target_xy = np.asarray(target_base[:2], dtype=float)
+            grasp_xy = np.asarray(footprint['center_xy'], dtype=float)
+            grasp_offset_xy = grasp_xy - target_xy
             self.logger.info(
                 'Estimated top-down grasp footprint: '
                 f'elongated={footprint["elongated"]} '
@@ -281,6 +284,7 @@ class TopdownGraspPointNode(GraspPointNode):
                 f'major={footprint["major_length_m"]:.3f} m '
                 f'minor={footprint["minor_length_m"]:.3f} m '
                 f'top_z={footprint["top_z"]:.3f} m '
+                f'center_offset=({grasp_offset_xy[0]:.3f}, {grasp_offset_xy[1]:.3f}) m '
                 f'grasp_roll={topdown_roll:.3f} rad'
             )
 
@@ -310,7 +314,7 @@ class TopdownGraspPointNode(GraspPointNode):
             self.logger.info('Rotate the wrist roll to align with the object long axis.')
             self.debug_move_to_pose({'joint_wrist_roll': topdown_roll})
 
-            hover_pose = self._compute_hover_pose(target_base[:2], footprint['hover_tip_z'])
+            hover_pose = self._compute_hover_pose(grasp_xy, footprint['hover_tip_z'])
             if hover_pose is None:
                 self.logger.error('Unable to compute the hover pose for top-down grasping.')
                 response.success = False
@@ -323,7 +327,7 @@ class TopdownGraspPointNode(GraspPointNode):
             hover_lift_m = max(hover_lift_m, min_lift_m)
             hover_lift_m = min(hover_lift_m, max_lift_m)
 
-            self.logger.info('Move the gripper above the requested grasp point.')
+            self.logger.info('Move the gripper above the estimated object center.')
             self.debug_move_to_pose(
                 {
                     'translate_mobile_base': hover_base_delta_m,
