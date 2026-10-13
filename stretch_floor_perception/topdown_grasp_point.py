@@ -249,7 +249,7 @@ class TopdownGraspPointNode(GraspPointNode):
                 f'x={msg.point.x:.3f} y={msg.point.y:.3f} z={msg.point.z:.3f}'
             )
 
-            self.stow_the_robot()
+            #self.stow_the_robot()
 
             ## TODO delete unnecesary for topdown.
             manip = self.look_at_surface(scan_time_s=self.scan_time_s)
@@ -326,7 +326,7 @@ class TopdownGraspPointNode(GraspPointNode):
             self.logger.info('Move the gripper above the requested grasp point.')
             self.debug_move_to_pose(
                 {
-                    'translate_mobile_base': hover_base_delta_m,
+                    'translate_mobile_base': hover_base_delta_m-0.03,
                     'wrist_extension': hover_extension_m,
                     'joint_lift': hover_lift_m,
                 }
@@ -352,7 +352,7 @@ class TopdownGraspPointNode(GraspPointNode):
             self.debug_move_to_pose({'gripper_aperture': 0.0})
             time.sleep(2.0)
 
-            lift_with_object_m = max(float(self.lift_position) + self.object_lift_height_m, 0.2)
+            lift_with_object_m = max(float(self.lift_position) + self.object_lift_height_m, 0.6)
             lift_with_object_m = min(lift_with_object_m, max_lift_m)
             self.logger.info('Lift the object after grasping.')
             self.debug_move_to_pose({'joint_lift': lift_with_object_m})
@@ -383,7 +383,7 @@ class TopdownGraspPointNode(GraspPointNode):
 
         self.declare_parameter('debug_directory', '')
         self.declare_parameter('assumed_width_m', 0.05)
-        self.declare_parameter('scan_time_s', 2.0)
+        self.declare_parameter('scan_time_s', 1.0)
         self.declare_parameter('grasp_service', '/topdown_grasp_point')
         self.declare_parameter('dryrun', False)
         self.declare_parameter('debug_mode', False)
@@ -394,14 +394,14 @@ class TopdownGraspPointNode(GraspPointNode):
         self.declare_parameter('min_object_height_above_floor_m', 0.01)
         self.declare_parameter('max_object_height_m', 0.25)
         self.declare_parameter('min_object_points', 60)
-        self.declare_parameter('prealign_lift_m', 0.85)
+        self.declare_parameter('prealign_lift_m', 0.5)
         self.declare_parameter('initial_wrist_extension_m', 0.12)
         self.declare_parameter('topdown_wrist_pitch_rad', -math.pi / 2.0 + 0.07)
         self.declare_parameter('topdown_wrist_yaw_rad', 0.0)
         self.declare_parameter('topdown_hover_above_object_m', 0.35)
         self.declare_parameter('topdown_floor_clearance_m', 0.025)
         self.declare_parameter('topdown_below_top_m', 0.01)
-        self.declare_parameter('object_lift_height_m', 0.10)
+        self.declare_parameter('object_lift_height_m', 0.50)
         self.declare_parameter('roll_axis_offset_rad', 0.0)
         self.declare_parameter('min_elongation_ratio', 1.35)
 

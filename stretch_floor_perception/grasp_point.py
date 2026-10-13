@@ -305,7 +305,7 @@ class GraspPointNode(hm.HelloNode):
             min_lift_m = 0.07
             min_extension_m = 0.01
             max_extension_m = 0.5
-            initial_wrist_extension = 0.2
+            initial_wrist_extension = 0.12
 
             pregrasp_lift_m = manip.get_pregrasp_lift(grasp_target, self.tf2_buffer)
             if self.get_tool() == "tool_stretch_dex_wrist":
@@ -342,7 +342,7 @@ class GraspPointNode(hm.HelloNode):
             self.logger.info(f"debug pregrasp_mobile_base: {pregrasp_mobile_base_m}\n debug pregrasp_wrist_extension: {pregrasp_wrist_extension_m}")
 
             self.logger.info('Drive to pregrasp location.')
-            self.debug_drive(pregrasp_mobile_base_m)
+            self.debug_drive(pregrasp_mobile_base_m-0.01)
 
             if self.wrist_position is None:
                 self.logger.error('wrist position unavailable')
@@ -366,7 +366,7 @@ class GraspPointNode(hm.HelloNode):
             extension_m = max(self.wrist_position + grasp_wrist_extension_m, min_extension_m)
             extension_m = min(extension_m, max_extension_m)
             self.debug_move_to_pose({
-                'translate_mobile_base': grasp_mobile_base_m,
+                'translate_mobile_base': grasp_mobile_base_m-0.01,
                 'joint_lift': lift_m,
                 'wrist_extension': extension_m
             })
@@ -378,8 +378,8 @@ class GraspPointNode(hm.HelloNode):
             time.sleep(3.0)
 
             self.logger.info('Attempt to lift the object.')
-            object_lift_height_m = 0.1
-            lift_m = max(self.lift_position + object_lift_height_m, 0.2)
+            object_lift_height_m = 0.5
+            lift_m = max(self.lift_position + object_lift_height_m, 0.6)
             lift_m = min(lift_m, max_lift_m)
             self.debug_move_to_pose({'joint_lift': lift_m})
 
@@ -409,7 +409,7 @@ class GraspPointNode(hm.HelloNode):
         self.declare_parameter('dryrun', False)
         self.declare_parameter('debug_mode', False)
         self.declare_parameter('handoff_release_wait_s', 2.0)
-        self.declare_parameter('stow_after_handoff', False)
+        self.declare_parameter('stow_after_handoff', True)
 
         self.debug_directory = self.get_parameter('debug_directory').value
         self.assumed_width_m = float(self.get_parameter('assumed_width_m').value)

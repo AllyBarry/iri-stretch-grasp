@@ -52,6 +52,9 @@ else
     tmux new-window -t "$SESSION:8" -n "TTS"
     tmux send-keys -t "$SESSION:TTS" "ros2 run sound_play soundplay_node.py" C-m
 
+    # WINDOW 9: TTS Server
+    tmux new-window -t "$SESSION:9" -n "EC"
+    tmux send-keys -t "$SESSION:EC" "ros2 run stretch_tools emergency_call_node" C-m
 
     tmux attach-session -t "$SESSION:1"
 fi
