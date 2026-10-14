@@ -396,20 +396,26 @@ class GraspPointNode(hm.HelloNode):
             response.message = str(exc)
             return response
 
+    def _declare_parameter_once(self, name, default):
+        # HelloNode auto-declares parameters passed as overrides (--params-file, -p),
+        # so only declare the ones that were not overridden.
+        if not self.has_parameter(name):
+            self.declare_parameter(name, default)
+
     def main(self):
         hm.HelloNode.main(self, 'grasp_point', 'grasp_point', wait_for_first_pointcloud=False)
         self.logger = self.get_logger()
 
         self.callback_group = ReentrantCallbackGroup()
 
-        self.declare_parameter('debug_directory', '')
-        self.declare_parameter('assumed_width_m', 0.05)
-        self.declare_parameter('scan_time_s', 2.0)
-        self.declare_parameter('grasp_service', '/grasp_point')
-        self.declare_parameter('dryrun', False)
-        self.declare_parameter('debug_mode', False)
-        self.declare_parameter('handoff_release_wait_s', 2.0)
-        self.declare_parameter('stow_after_handoff', True)
+        self._declare_parameter_once('debug_directory', '')
+        self._declare_parameter_once('assumed_width_m', 0.05)
+        self._declare_parameter_once('scan_time_s', 2.0)
+        self._declare_parameter_once('grasp_service', '/grasp_point')
+        self._declare_parameter_once('dryrun', False)
+        self._declare_parameter_once('debug_mode', False)
+        self._declare_parameter_once('handoff_release_wait_s', 2.0)
+        self._declare_parameter_once('stow_after_handoff', True)
 
         self.debug_directory = self.get_parameter('debug_directory').value
         self.assumed_width_m = float(self.get_parameter('assumed_width_m').value)

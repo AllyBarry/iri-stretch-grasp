@@ -49,7 +49,9 @@ install(PROGRAMS
   stretch_floor_perception/floor_object_detector.py
   stretch_floor_perception/scan_client.py
   stretch_floor_perception/grasp_point.py
+  stretch_floor_perception/grasp_carry.py
   stretch_floor_perception/topdown_grasp_point.py
+  stretch_floor_perception/handover.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

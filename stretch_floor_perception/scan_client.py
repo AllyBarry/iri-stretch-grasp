@@ -21,8 +21,8 @@ class ManualScanClient(Node):
         self.declare_parameter("depth_topic", "/camera/aligned_depth_to_color/image_raw/compressedDepth")
         self.declare_parameter("camera_info_topic", "/camera/color/camera_info")
         self.declare_parameter("service_name", "detect_floor_objects_3d")
-        self.declare_parameter("grasp_service_name", "/grasp_point")
-        self.declare_parameter("topdown_grasp_service_name", "/topdown_grasp_point")
+        self.declare_parameter("grasp_service_name", "/grasp_carry")
+        self.declare_parameter("topdown_grasp_service_name", "/topdown_grasp_carry")
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -126,7 +126,7 @@ class ManualScanClient(Node):
             return
 
         selected = detections[selection]
-        self._call_grasp_point(selected)
+        self._call_grasp_carry(selected)
 
     def _prompt_for_detection_index(self, num_detections: int):
         prompt = f"Select object index to grasp [0-{num_detections - 1}] (or 'q' to cancel): "
@@ -146,7 +146,7 @@ class ManualScanClient(Node):
             print(f"Index out of range. Choose a value from 0 to {num_detections - 1}.")
         return None
 
-    def _call_grasp_point(self, detection) -> None:
+    def _call_grasp_carry(self, detection) -> None:
         grasp_direction = str(detection.grasp_direction).strip().lower()
         if grasp_direction == "top":
             client = self._topdown_grasp_client
