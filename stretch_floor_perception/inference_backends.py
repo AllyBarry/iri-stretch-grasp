@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from transformers import DetrForObjectDetection, DetrImageProcessor
 
 
 class Detection2D:
@@ -265,6 +264,13 @@ class DetrBackend(BaseInferenceBackend):
         logger=None,
         **_kwargs,
     ):
+        try:
+            from transformers import DetrForObjectDetection, DetrImageProcessor
+        except ImportError as e:
+            raise RuntimeError(
+                "DetrBackend requires the transformers package"
+            ) from e
+
         self._logger = logger
         self.processor = DetrImageProcessor.from_pretrained(model, revision=revision)
         self.model = DetrForObjectDetection.from_pretrained(model, revision=revision)

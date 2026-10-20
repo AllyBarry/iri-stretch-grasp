@@ -22,7 +22,7 @@ class ManualScanClient(Node):
         self.declare_parameter("camera_info_topic", "/camera/color/camera_info")
         self.declare_parameter("service_name", "detect_floor_objects_3d")
         self.declare_parameter("grasp_service_name", "/grasp_carry")
-        self.declare_parameter("topdown_grasp_service_name", "/topdown_grasp_carry")
+        self.declare_parameter("topdown_grasp_service_name", "/topdown_grasp")
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -50,9 +50,10 @@ class ManualScanClient(Node):
 
         grasp_service_name = self.get_parameter("grasp_service_name").value
         self._grasp_client = self.create_client(GraspPoint, grasp_service_name)
-        self.get_logger().info(f"Waiting for service '{grasp_service_name}'...")
-        self._grasp_client.wait_for_service()
-        self.get_logger().info("Grasp service available.")
+        # Testing the top-down grasp: don't block on the front grasp service.
+        # self.get_logger().info(f"Waiting for service '{grasp_service_name}'...")
+        # self._grasp_client.wait_for_service()
+        # self.get_logger().info("Grasp service available.")
 
         topdown_grasp_service_name = self.get_parameter("topdown_grasp_service_name").value
         self._topdown_grasp_client = self.create_client(GraspPoint, topdown_grasp_service_name)
@@ -148,12 +149,15 @@ class ManualScanClient(Node):
 
     def _call_grasp_carry(self, detection) -> None:
         grasp_direction = str(detection.grasp_direction).strip().lower()
-        if grasp_direction == "top":
-            client = self._topdown_grasp_client
-            service_name = self.get_parameter("topdown_grasp_service_name").value
-        else:
-            client = self._grasp_client
-            service_name = self.get_parameter("grasp_service_name").value
+        # Testing the top-down grasp: always use it, whatever grasp_direction says.
+        # if grasp_direction == "top":
+        #     client = self._topdown_grasp_client
+        #     service_name = self.get_parameter("topdown_grasp_service_name").value
+        # else:
+        # client = self._grasp_client
+        # service_name = self.get_parameter("grasp_service_name").value
+        client = self._topdown_grasp_client
+        service_name = self.get_parameter("topdown_grasp_service_name").value
 
         if not client.wait_for_service(timeout_sec=2.0):
             print(f"Selected grasp service '{service_name}' is unavailable.")
@@ -162,9 +166,15 @@ class ManualScanClient(Node):
         request = GraspPoint.Request()
         request.target.header = detection.header
         request.target.point = detection.centroid
+        # The box lets the grasp node keep to this object's points and align with its long axis.
+        request.bbox = detection.bbox3d
+        # The grasp node confirms the grasp by detecting this label in the gripper. Use the
+        # detector's own label, since that is what it will detect (not the VLM's name).
+        request.expected_label = str(detection.detector_class_name or detection.class_name)
 
         print(
-            f"Calling grasp service '{service_name}' for grasp_direction='{grasp_direction or 'unsure'}'."
+            f"Calling grasp service '{service_name}' for '{request.expected_label}', "
+            f"grasp_direction='{grasp_direction or 'unsure'}'."
         )
         future = client.call_async(request)
         while rclpy.ok() and not future.done():

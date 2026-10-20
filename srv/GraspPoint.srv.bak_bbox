@@ -1,0 +1,8 @@
+geometry_msgs/PointStamped target
+float32 assumed_width_m
+# Detector label of the object to grasp. When set, the grasp is confirmed by
+# detecting this label in the gripper and no longer at the pick location.
+string expected_label
+---
+bool success
+string message
