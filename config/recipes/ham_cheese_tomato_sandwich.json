@@ -1,0 +1,56 @@
+{
+  "recipe_id": "ham_cheese_tomato_sandwich",
+  "name": "Ham, Cheese and Tomato Sandwich",
+  "ingredients": ["Mozzarella", "Tomato", "Ham", "Butter", "Bread"],
+  "tools": ["Plate", "Knife", "Cutting Board"],
+  "steps": [
+    {
+      "name": "Cut bread open",
+      "actions": [
+        { "action": "pick", "args": { "object": "Bread" } },
+        { "action": "place", "args": { "object": "Bread", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Bread" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Plate" } }
+      ]
+    },
+    {
+      "name": "Butter bread",
+      "actions": [
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "spread", "args": { "tool": "Knife", "object": "Butter", "target": "Bread" } },
+        { "action": "put_aside", "args": { "object": "Knife" } }
+      ]
+    },
+    {
+      "name": "Add tomato",
+      "actions": [
+        { "action": "pick", "args": { "object": "Tomato" } },
+        { "action": "place", "args": { "object": "Tomato", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Tomato" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Plate" } }
+      ]
+    },
+    {
+      "name": "Add mozzarella",
+      "actions": [
+        { "action": "pick", "args": { "object": "Mozzarella" } },
+        { "action": "place", "args": { "object": "Mozzarella", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Mozzarella" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Plate" } }
+      ]
+    },
+    {
+      "name": "Add ham",
+      "actions": [
+        { "action": "pick", "args": { "object": "Ham" } },
+        { "action": "place", "args": { "object": "Ham", "target": "Plate" } }
+      ]
+    }
+  ]
+}

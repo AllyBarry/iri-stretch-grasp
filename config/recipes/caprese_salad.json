@@ -1,0 +1,69 @@
+{
+  "recipe_id": "caprese_salad",
+  "name": "Caprese Salad",
+  "ingredients": ["Mozzarella", "Tomato", "Basil", "Salt", "Olive Oil"],
+  "tools": ["Bowl", "Plate", "Knife", "Spoon", "Cutting Board"],
+  "steps": [
+    {
+      "name": "Cut tomato",
+      "actions": [
+        { "action": "pick",      "args": { "object": "Tomato" } },
+        { "action": "place",     "args": { "object": "Tomato", "target": "Cutting Board" } },
+        { "action": "pick",      "args": { "object": "Knife" } },
+        { "action": "cut",       "args": { "tool": "Knife", "object": "Tomato" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer",  "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut mozzarella",
+      "actions": [
+        { "action": "pick",      "args": { "object": "Mozzarella" } },
+        { "action": "place",     "args": { "object": "Mozzarella", "target": "Cutting Board" } },
+        { "action": "pick",      "args": { "object": "Knife" } },
+        { "action": "cut",       "args": { "tool": "Knife", "object": "Mozzarella" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer",  "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Add basil",
+      "actions": [
+        { "action": "pick",  "args": { "object": "Basil" } },
+        { "action": "place", "args": { "object": "Basil", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Season with salt",
+      "actions": [
+        { "action": "pick",      "args": { "object": "Salt" } },
+        { "action": "drizzle",   "args": { "object": "Salt", "target": "Bowl" } },
+        { "action": "put_aside", "args": { "object": "Salt" } }
+      ]
+    },
+    {
+      "name": "Add olive oil",
+      "actions": [
+        { "action": "pick",      "args": { "object": "Olive Oil" } },
+        { "action": "drizzle",   "args": { "object": "Olive Oil", "target": "Bowl" } },
+        { "action": "put_aside", "args": { "object": "Olive Oil" } }
+      ]
+    },
+    {
+      "name": "Mix salad",
+      "actions": [
+        { "action": "pick",      "args": { "object": "Spoon" } },
+        { "action": "mix",       "args": { "tool": "Spoon", "target": "Bowl" } },
+        { "action": "put_aside", "args": { "object": "Spoon" } }
+      ]
+    },
+    {
+      "name": "Serve",
+      "actions": [
+        { "action": "pick",      "args": { "object": "Bowl" } },
+        { "action": "transfer",  "args": { "source": "Bowl", "target": "Plate" } },
+        { "action": "put_aside", "args": { "object": "Bowl" } }
+      ]
+    }
+  ]
+}

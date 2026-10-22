@@ -1,0 +1,179 @@
+{
+  "recipe_id": "chickpea_salad",
+  "name": "Chickpea Salad",
+  "ingredients": ["Tomato", "Salt", "Olive Oil", "Olives", "Onion", "Cucumber", "Lemon", "Garlic", "Mustard", "Pepper", "Chickpeas", "Parsley", "Dill", "Mint"],
+  "tools": ["Cup", "Bowl", "Plate", "Knife", "Spoon", "Cutting Board"],
+  "steps": [
+    {
+      "name": "Add chickpeas",
+      "actions": [
+        { "action": "pick", "args": { "object": "Chickpeas" } },
+        { "action": "place", "args": { "object": "Chickpeas", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut cucumber",
+      "actions": [
+        { "action": "pick", "args": { "object": "Cucumber" } },
+        { "action": "place", "args": { "object": "Cucumber", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Cucumber" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut tomato",
+      "actions": [
+        { "action": "pick", "args": { "object": "Tomato" } },
+        { "action": "place", "args": { "object": "Tomato", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Tomato" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut onion",
+      "actions": [
+        { "action": "pick", "args": { "object": "Onion" } },
+        { "action": "place", "args": { "object": "Onion", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Onion" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut pepper",
+      "actions": [
+        { "action": "pick", "args": { "object": "Pepper" } },
+        { "action": "place", "args": { "object": "Pepper", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Pepper" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Add olives",
+      "actions": [
+        { "action": "pick", "args": { "object": "Olives" } },
+        { "action": "place", "args": { "object": "Olives", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut parsley",
+      "actions": [
+        { "action": "pick", "args": { "object": "Parsley" } },
+        { "action": "place", "args": { "object": "Parsley", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Parsley" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut dill",
+      "actions": [
+        { "action": "pick", "args": { "object": "Dill" } },
+        { "action": "place", "args": { "object": "Dill", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Dill" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut mint",
+      "actions": [
+        { "action": "pick", "args": { "object": "Mint" } },
+        { "action": "place", "args": { "object": "Mint", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Mint" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Bowl" } }
+      ]
+    },
+    {
+      "name": "Cut garlic for dressing",
+      "actions": [
+        { "action": "pick", "args": { "object": "Garlic" } },
+        { "action": "place", "args": { "object": "Garlic", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Garlic" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "transfer", "args": { "source": "Cutting Board", "target": "Cup" } }
+      ]
+    },
+    {
+      "name": "Add lemon juice to dressing",
+      "actions": [
+        { "action": "pick", "args": { "object": "Lemon" } },
+        { "action": "place", "args": { "object": "Lemon", "target": "Cutting Board" } },
+        { "action": "pick", "args": { "object": "Knife" } },
+        { "action": "cut", "args": { "tool": "Knife", "object": "Lemon" } },
+        { "action": "put_aside", "args": { "object": "Knife" } },
+        { "action": "pick", "args": { "object": "Lemon" } },
+        { "action": "squeeze", "args": { "object": "Lemon", "target": "Cup" } },
+        { "action": "put_aside", "args": { "object": "Lemon" } }
+      ]
+    },
+    {
+      "name": "Add mustard to dressing",
+      "actions": [
+        { "action": "pick", "args": { "object": "Mustard" } },
+        { "action": "drizzle", "args": { "object": "Mustard", "target": "Cup" } },
+        { "action": "put_aside", "args": { "object": "Mustard" } }
+      ]
+    },
+    {
+      "name": "Add olive oil to dressing",
+      "actions": [
+        { "action": "pick", "args": { "object": "Olive Oil" } },
+        { "action": "drizzle", "args": { "object": "Olive Oil", "target": "Cup" } },
+        { "action": "put_aside", "args": { "object": "Olive Oil" } }
+      ]
+    },
+    {
+      "name": "Add salt to dressing",
+      "actions": [
+        { "action": "pick", "args": { "object": "Salt" } },
+        { "action": "drizzle", "args": { "object": "Salt", "target": "Cup" } },
+        { "action": "put_aside", "args": { "object": "Salt" } }
+      ]
+    },
+    {
+      "name": "Mix dressing",
+      "actions": [
+        { "action": "pick", "args": { "object": "Spoon" } },
+        { "action": "mix", "args": { "tool": "Spoon", "target": "Cup" } },
+        { "action": "put_aside", "args": { "object": "Spoon" } }
+      ]
+    },
+    {
+      "name": "Pour dressing over salad",
+      "actions": [
+        { "action": "pick", "args": { "object": "Cup" } },
+        { "action": "transfer", "args": { "source": "Cup", "target": "Bowl" } },
+        { "action": "put_aside", "args": { "object": "Cup" } }
+      ]
+    },
+    {
+      "name": "Mix salad",
+      "actions": [
+        { "action": "pick", "args": { "object": "Spoon" } },
+        { "action": "mix", "args": { "tool": "Spoon", "target": "Bowl" } },
+        { "action": "put_aside", "args": { "object": "Spoon" } }
+      ]
+    },
+    {
+      "name": "Serve",
+      "actions": [
+        { "action": "pick", "args": { "object": "Bowl" } },
+        { "action": "transfer", "args": { "source": "Bowl", "target": "Plate" } },
+        { "action": "put_aside", "args": { "object": "Bowl" } }
+      ]
+    }
+  ]
+}
