@@ -22,6 +22,7 @@
 
 <!-- Dependencies used by bt_cooking -->
 <exec_depend>py_trees</exec_depend>
+<exec_depend>unaceba</exec_depend>
 
 <exec_depend>rosidl_default_runtime</exec_depend>
 

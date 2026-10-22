@@ -1,11 +1,15 @@
-#!/usr/bin/env python3
-import bt_cooking
+import py_trees
 
+from bt_cooking.stretch_skills import *
 
-def main():
-    print("Test")
-    print("bt_cooking loaded from:", bt_cooking.__file__)
+def test_sequence():
+    test_seq = py_trees.composites.Sequence(
+        name="test_sequence",
+        memory=False,
+        children=[
+            TestNode(),
+            TestNode()
+        ]
+    )
 
-
-if __name__ == "__main__":
-    main()
+    return test_seq

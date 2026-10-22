@@ -51,7 +51,7 @@ install(PROGRAMS
   stretch_floor_perception/scan_client.py
   stretch_floor_perception/grasp_point.py
   stretch_floor_perception/topdown_grasp_point.py
-  bt_cooking/stretch_bt.py
+  bt_cooking/run_cooking_task.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
