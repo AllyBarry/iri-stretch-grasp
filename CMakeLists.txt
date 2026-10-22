@@ -27,7 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 ament_python_install_package(${PROJECT_NAME})
-ament_python_install_package(bt_cooking)   # NEW
+ament_python_install_package(bt_cooking) 
 
 ament_get_python_install_dir(PYTHON_INSTALL_DIR)
 install(
@@ -51,7 +51,7 @@ install(PROGRAMS
   stretch_floor_perception/scan_client.py
   stretch_floor_perception/grasp_point.py
   stretch_floor_perception/topdown_grasp_point.py
-  # bt_cooking/your_node.py            # NEW: add executables here, if any
+  bt_cooking/stretch_bt.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

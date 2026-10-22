@@ -16,6 +16,7 @@ setup(
     entry_points={
         'console_scripts': [
             'scan_client = stretch_floor_perception.scan_client:main',
+            'stretch_bt = bt_cooking.stretch_bt:main',
         ],
     },
 
