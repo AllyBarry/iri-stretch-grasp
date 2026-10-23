@@ -62,10 +62,9 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
-# Install recipe JSON files.
 install(
-  DIRECTORY config/recipes
-  DESTINATION share/${PROJECT_NAME}/config
+  DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 install(FILES
