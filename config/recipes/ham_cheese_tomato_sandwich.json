@@ -1,5 +1,6 @@
 {
   "recipe_id": "ham_cheese_tomato_sandwich",
+  "type":"sandwich",
   "name": "Ham, Cheese and Tomato Sandwich",
   "ingredients": ["Mozzarella", "Tomato", "Ham", "Butter", "Bread"],
   "tools": ["Plate", "Knife", "Cutting Board"],

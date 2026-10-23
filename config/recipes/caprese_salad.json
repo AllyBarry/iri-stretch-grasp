@@ -1,5 +1,6 @@
 {
   "recipe_id": "caprese_salad",
+  "type":"salad",
   "name": "Caprese Salad",
   "ingredients": ["Mozzarella", "Tomato", "Basil", "Salt", "Olive Oil"],
   "tools": ["Bowl", "Plate", "Knife", "Spoon", "Cutting Board"],

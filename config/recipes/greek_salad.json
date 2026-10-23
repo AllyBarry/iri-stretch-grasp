@@ -1,5 +1,6 @@
 {
   "recipe_id": "greek_salad",
+  "type":"salad",
   "name": "Greek Salad",
   "ingredients": ["Tomato", "Salt", "Olive Oil", "Olives", "Onion", "Feta", "Cucumber", "Oregano", "Lemon"],
   "tools": ["Bowl", "Plate", "Knife", "Spoon", "Cutting Board"],

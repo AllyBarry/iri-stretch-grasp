@@ -27,13 +27,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 ament_python_install_package(${PROJECT_NAME})
-ament_python_install_package(bt_cooking) 
+ament_python_install_package(bt_cooking)
 
 ament_get_python_install_dir(PYTHON_INSTALL_DIR)
+
 install(
   DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_py/${PROJECT_NAME}
   DESTINATION ${PYTHON_INSTALL_DIR}
 )
+
 install(
   FILES
     ${CMAKE_CURRENT_BINARY_DIR}/lib${PROJECT_NAME}__rosidl_generator_c.so
@@ -58,6 +60,12 @@ install(PROGRAMS
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+# Install recipe JSON files.
+install(
+  DIRECTORY config/recipes
+  DESTINATION share/${PROJECT_NAME}/config
 )
 
 install(FILES

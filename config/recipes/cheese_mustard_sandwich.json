@@ -1,5 +1,6 @@
 {
   "recipe_id": "cheese_mustard_sandwich",
+  "type":"sandwich",
   "name": "Cheese and Mustard Sandwich",
   "ingredients": ["Mozzarella", "Mustard", "Butter", "Bread"],
   "tools": ["Plate", "Knife", "Cutting Board"],

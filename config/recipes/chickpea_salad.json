@@ -1,5 +1,6 @@
 {
   "recipe_id": "chickpea_salad",
+  "type":"salad",
   "name": "Chickpea Salad",
   "ingredients": ["Tomato", "Salt", "Olive Oil", "Olives", "Onion", "Cucumber", "Lemon", "Garlic", "Mustard", "Pepper", "Chickpeas", "Parsley", "Dill", "Mint"],
   "tools": ["Cup", "Bowl", "Plate", "Knife", "Spoon", "Cutting Board"],
