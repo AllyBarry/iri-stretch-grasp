@@ -7,20 +7,16 @@ from ament_index_python.packages import get_package_share_directory
 from unaceba.task.state import State
 from unaceba.utils.variables import CategoricalRange
 
-
-def load_recipes():
-    try:
-        # Find the installed ROS 2 package.
-        recipes_dir = (
-            Path(get_package_share_directory("stretch_floor_perception"))
-            / "config"
-            / "recipes"
-        )
-    except Exception:
-        # Fallback for execution directly from the source tree.
-        recipes_dir = Path(__file__).resolve().parent.parent / "config" / "recipes"
+def load_recipe_data():
+    recipes_dir = (
+        Path(get_package_share_directory("stretch_floor_perception"))
+        / "config"
+        / "recipes"
+    )
 
     recipes = defaultdict(list)
+    ingredients = set()
+    tools = set()
 
     for recipe_file in sorted(recipes_dir.glob("*.json")):
         with recipe_file.open("r", encoding="utf-8") as f:
@@ -30,12 +26,14 @@ def load_recipes():
         recipe_type = recipe["type"]
 
         recipes[recipe_type].append(recipe_id)
+        ingredients.update(recipe.get("ingredients", []))
+        tools.update(recipe.get("tools", []))
 
-    return dict(recipes)
+    return dict(recipes), sorted(ingredients), sorted(tools)
 
 
 class StretchState(State):
-    _RECIPES = load_recipes()
+    _RECIPES, _INGREDIENTS, _TOOLS = load_recipe_data()
 
     def __init__(self, state_vars=None, var_ranges=None,
                  semantic_dict=None, values=None):

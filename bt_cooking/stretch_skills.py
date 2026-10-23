@@ -17,6 +17,8 @@ class TestNode(ActionNode):
         self.board.register_key("environment", access=py_trees.common.Access.READ)
 
     def execute(self, state: StretchState):
+        print(state.values)
+
         return py_trees.common.Status.SUCCESS
 
     def input_variables(self):
