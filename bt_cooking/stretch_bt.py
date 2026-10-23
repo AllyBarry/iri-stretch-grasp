@@ -9,7 +9,7 @@ def test_sequence():
         children=[
             TestNode(),
             CalculateReachabilityNode(),
-            TestNode()
+            DecideTargetObjectNode()
         ]
     )
 

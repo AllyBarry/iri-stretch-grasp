@@ -53,6 +53,10 @@ def load_location_data():
                 if location not in locations:
                     locations.append(location)
 
+    # Add human location for terminal location after handover
+    if "Human" not in locations:
+        locations.append("Human")
+
     return priors, locations
 
 
@@ -66,6 +70,7 @@ class StretchState(State):
         state_vars = [
             "recipe/type",
             "recipe/name",
+            "target_object"
         ]
 
         var_ranges = (var_ranges or {}) | {
@@ -81,16 +86,16 @@ class StretchState(State):
                 ],
                 allow_none=True
             ),
+            "target_object": CategoricalRange(
+                self.get_objects(),
+                allow_none=True
+            ),
         }
 
         semantic_dict = (semantic_dict or {}) | {
-            "recipe/type": (
-                "The broad category of recipe, e.g. 'salad' or 'sandwich'"
-            ),
-            "recipe/name": (
-                "The specific recipe ID, e.g. 'caprese_salad' or "
-                "'ham_cheese_tomato_sandwich'"
-            ),
+            "recipe/type": "The broad category of recipe, e.g. 'salad' or 'sandwich'",
+            "recipe/name": "The specific recipe ID, e.g. 'caprese_salad' or 'ham_cheese_tomato_sandwich'",
+            "target_object": "The object the robot has decided to fetch to bring to the human"
         }
 
         # Confidence in locations
@@ -113,26 +118,26 @@ class StretchState(State):
         availability_defaults = {}
         for obj in self._INGREDIENTS + self._TOOLS:
             vars = [
-                f"reachable/{obj}",
-                f"confidence/reachable/{obj}",
+                f"human_reachable/{obj}",
+                f"confidence/human_reachable/{obj}",
                 f"required/{obj}",
                 f"confidence/required/{obj}",
             ]
             state_vars += vars
 
-            var_ranges[f"reachable/{obj}"] = BooleanRange()
+            var_ranges[f"human_reachable/{obj}"] = BooleanRange()
             var_ranges[f"required/{obj}"] = BooleanRange()
-            var_ranges[f"confidence/reachable/{obj}"] = NormalisedFloatRange()
+            var_ranges[f"confidence/human_reachable/{obj}"] = NormalisedFloatRange()
             var_ranges[f"confidence/required/{obj}"] = NormalisedFloatRange()
 
-            semantic_dict[f"reachable/{obj}"] = f"Whether or not object {obj} is reachable by the human"
+            semantic_dict[f"human_reachable/{obj}"] = f"Whether or not object {obj} is reachable by the human"
             semantic_dict[f"required/{obj}"] = f"Whether or not object {obj} is required in the current recipe"
-            semantic_dict[f"confidence/reachable/{obj}"] = f"The probability (0 to 1) that the variable 'reachable/{obj}' is correct"
+            semantic_dict[f"confidence/human_reachable/{obj}"] = f"The probability (0 to 1) that the '{obj}' is reachable by the human"
             semantic_dict[f"confidence/required/{obj}"] = f"The probability (0 to 1) that the variable 'required/{obj}' is correct"
 
-            availability_defaults[f"reachable/{obj}"] = False
+            availability_defaults[f"human_reachable/{obj}"] = False
             availability_defaults[f"required/{obj}"] = False
-            availability_defaults[f"confidence/reachable/{obj}"] = 0.0
+            availability_defaults[f"confidence/human_reachable/{obj}"] = 0.0
             availability_defaults[f"confidence/required/{obj}"] = 0.0
 
         
@@ -161,3 +166,7 @@ class StretchState(State):
         path = Path(get_package_share_directory(_PKG)) / "config" / "recipes" / f"{recipe}.json"
         with open(path, "r") as f:
             return json.load(f)
+
+    @staticmethod
+    def get_objects():
+        return list(set(StretchState._INGREDIENTS) | set(StretchState._TOOLS))
