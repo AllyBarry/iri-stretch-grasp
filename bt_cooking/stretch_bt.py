@@ -8,6 +8,7 @@ def test_sequence():
         memory=False,
         children=[
             TestNode(),
+            CalculateReachabilityNode(),
             TestNode()
         ]
     )
