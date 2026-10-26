@@ -112,6 +112,95 @@ class DecideTargetObjectNode(ActionNode):
 EXECUTING ROBOT SKILLS
 '''
 # TODO: Navigate to location
+class NavigateToPlaceNode(RosActionNode):
+    SERVICE_NAME:   str   = "TODO"
+    SERVER_TIMEOUT: float = 5.0
+
+    def __init__(self, name: str = "NavigateToPlaceNode"):
+        super().__init__(name)
+        self._client         = None
+        self._response_future = None
+        self._sent           = False
+
+        self.board.register_key("environment", access=py_trees.common.Access.READ) 
+
+    def input_variables(self) -> List[str]:
+        return ["target_location"]
+
+    def output_variables(self) -> List[str]:
+        return []
+
+    def ros_setup(self) -> None:
+        self._client = self._ros_node.create_client(
+            TODO_MESSAGE_TYPE,
+            self.SERVICE_NAME
+        )
+
+    def initialise(self) -> None:
+        self._response_future = None
+        self._sent            = False
+
+        self._ros_node.get_logger().info(
+            f"[{self.name}] Waiting for service '{self.SERVICE_NAME}'..."
+        )
+
+        if not self._client.wait_for_service(timeout_sec=self.SERVER_TIMEOUT):
+            self._ros_node.get_logger().error(
+                f"[{self.name}] Service '{self.SERVICE_NAME}' not available "
+                f"after {self.SERVER_TIMEOUT}s."
+            )
+            return  # _response_future stays None; execute() returns FAILURE
+
+        state         = self.board.state
+        target_location = state.get_value("target_location")
+
+        request              = TODO_MESSAGE_TYPE.Request()
+        request.target_location  = target_location if target_location is not None else "" # TODO: Fix to conform to message type
+
+        self._response_future = self._client.call_async(request)
+        self._sent            = True
+
+    def execute(self, state) -> py_trees.common.Status:
+        # Service was unreachable
+        if self._response_future is None:
+            return py_trees.common.Status.FAILURE
+
+        # Waiting on operator
+        if not self._response_future.done():
+            return py_trees.common.Status.RUNNING
+
+        response = self._response_future.result()
+
+        if response is None:
+            self._ros_node.get_logger().error(
+                f"[{self.name}] Service call returned no response."
+            )
+            return py_trees.common.Status.FAILURE
+
+        if response.success:
+            self._ros_node.get_logger().info(
+                f"[{self.name}] Navigation successful. "
+                f"Message: '{response.message}'"
+            )
+            return py_trees.common.Status.SUCCESS
+        else:
+            self._ros_node.get_logger().warn(
+                f"[{self.name}] Navigation failed. "
+                f"Message: '{response.message}'"
+            )
+            return py_trees.common.Status.FAILURE
+
+    def terminate(self, new_status) -> None:
+        if self._sent and self._response_future is not None \
+                and not self._response_future.done():
+            self._ros_node.get_logger().warn(
+                f"[{self.name}] Preempted before navigation finished "
+                f"(terminated with {new_status}). Response will be discarded."
+            )
+
+        self._response_future = None
+        self._sent            = False
+
 # TODO: Grasp object
 # TODO: Confirm grasp
 # TODO: Handover
