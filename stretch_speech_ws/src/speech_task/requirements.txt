@@ -1,0 +1,4 @@
+faster-whisper>=1.1      # transcriber (PC)
+sounddevice>=0.4         # audio_capture (robot or PC); needs libportaudio2
+webrtcvad-wheels>=2.0    # audio_capture VAD (optional, energy VAD fallback)
+anthropic>=1.0           # interpreter, backend:=anthropic only
