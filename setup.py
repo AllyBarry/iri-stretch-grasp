@@ -17,6 +17,8 @@ setup(
         'console_scripts': [
             'scan_client = stretch_floor_perception.scan_client:main',
             'run_cooking_task = bt_cooking.run_cooking_task:main',
+            'run_sim = stretch_sim.run_sim:main',
+            'sim_log_view = stretch_sim.log_view:main',
         ],
     },
 

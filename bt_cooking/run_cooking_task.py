@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import rclpy
 
-from bt_cooking.stretch_task import StretchTask
+from bt_cooking.stretch_task import DEFAULT_TREE, StretchTask, available_trees
 
 def get_workspace_logs_dir():
     prefix = os.environ.get("COLCON_PREFIX_PATH")
@@ -35,6 +35,32 @@ def parse_args():
         help="Display the behaviour tree while running. Default: enabled.",
     )
     parser.add_argument(
+        "--tree",
+        default=DEFAULT_TREE,
+        help=f"Tree to run: a tree builder in bt_cooking.stretch_bt (see --list-trees). Default: {DEFAULT_TREE}",
+    )
+    parser.add_argument(
+        "--list-trees",
+        action="store_true",
+        help="List the trees in bt_cooking.stretch_bt and exit.",
+    )
+    parser.add_argument(
+        "--recipe",
+        default=None,
+        help="Recipe id to set as recipe/name before the first tick, e.g. greek_salad.",
+    )
+    parser.add_argument(
+        "--location-poses",
+        default=None,
+        help="JSON file of location poses to navigate to, instead of config/locations/location_poses.json.",
+    )
+    parser.add_argument(
+        "--max-passes",
+        type=int,
+        default=10,
+        help="With --loop-until-done, stop after the tree has finished this many times. Default: 10",
+    )
+    parser.add_argument(
         "--loop-until-done",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -45,6 +71,14 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.list_trees:
+        for name in sorted(available_trees()):
+            print(name)
+        return
+
+    if args.location_poses:
+        os.environ["STRETCH_LOCATION_POSES"] = str(Path(args.location_poses).resolve())
 
     if args.run_dir:
         run_dir = Path(args.run_dir)
@@ -59,6 +93,9 @@ def main():
     task = StretchTask(
         log_dir=str(run_dir),
         log_file="episodic_memory",
+        tree=args.tree,
+        recipe=args.recipe,
+        max_passes=args.max_passes,
     )
 
     task.run(display_tree=args.display_tree, loop_until_done=args.loop_until_done)

@@ -1,0 +1,44 @@
+# Every object spawns where the location priors say it probably is, with a little
+# detector noise. Robot actions always succeed unless success_rate is lowered.
+world: apartment
+seed: 0
+
+spawn:
+  objects: all            # or a list of object names
+  priors_file: null       # null: config/locations/location_priors.json
+  place: {}               # pin objects, e.g. {Feta: Pantry}
+
+# What the detector calls each object; defaults to the lower-case object name.
+detector_labels: {}
+
+# How the detector says to grasp each object: front (grasp_carry, the default) or top
+# (topdown_grasp), e.g. {Cucumber: top}.
+grasp_directions: {}
+
+robot:
+  driver_mode: position   # the mode the driver starts in
+  # Probability that each robot action (navigate, move head, detect, grasp, hand over)
+  # succeeds. An action's own fail_prob below overrides it for that action.
+  success_rate: 1.0
+
+perception:
+  # A scan covers the whole surface the head points at; each object on it is missed
+  # with probability 1 - success_rate, or miss_prob if set here.
+  # miss_prob: 0.05
+  false_label_prob: 0.0   # a visible object is detected with another object's label
+  position_noise_m: 0.01
+
+navigation:
+  speed_mps: 0.3
+  turn_rate_rps: 1.0
+  # fail_prob: 0.1        # a goal aborts part way along the path
+
+# head:
+#   fail_prob: 0.1        # a head trajectory aborts
+
+grasp:
+  # fail_prob: 0.1        # the object slips out as the gripper closes
+
+handover:
+  # no_hand_prob: 0.1     # nobody takes the object
+  wait_s: 1.5

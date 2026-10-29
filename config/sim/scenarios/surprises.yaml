@@ -1,0 +1,38 @@
+# The robot's beliefs are wrong and its skills are unreliable: some objects are not
+# where the priors say, the detector uses generic labels and misses things, and grasps,
+# navigation and handovers sometimes fail.
+world: apartment
+seed: 3
+
+spawn:
+  objects: all
+  place:
+    Feta: Pantry          # prior says Fridge 0.95
+    Basil: Pantry         # prior says Pantry 0.0
+    Knife: Fridge         # prior says Table 1.0
+
+detector_labels:
+  Olive Oil: bottle
+  Cup: cup
+  Bowl: bowl
+
+grasp_directions:         # the rest are grasped from the front
+  Feta: top
+  Bowl: top
+
+robot:
+  driver_mode: position
+
+perception:
+  miss_prob: 0.2         # each object on a scanned surface is missed 20% of the time
+  false_label_prob: 0.05
+  position_noise_m: 0.015
+
+navigation:
+  fail_prob: 0.1
+
+grasp:
+  fail_prob: 0.2
+
+handover:
+  no_hand_prob: 0.2

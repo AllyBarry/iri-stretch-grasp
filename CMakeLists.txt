@@ -31,6 +31,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 ament_python_install_package(${PROJECT_NAME})
 ament_python_install_package(bt_cooking)
+ament_python_install_package(stretch_sim)
 
 ament_get_python_install_dir(PYTHON_INSTALL_DIR)
 
@@ -65,6 +66,8 @@ install(PROGRAMS
   stretch_floor_perception/scan_surface.py
   stretch_floor_perception/define_surface.py
   bt_cooking/run_cooking_task.py
+  stretch_sim/run_sim.py
+  stretch_sim/log_view.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -76,6 +79,12 @@ install(DIRECTORY
 install(
   DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
+)
+
+# Web viewer page for stretch_sim (found by stretch_sim/web/server.py)
+install(
+  DIRECTORY stretch_sim/web/static/
+  DESTINATION share/${PROJECT_NAME}/sim_web
 )
 
 install(FILES

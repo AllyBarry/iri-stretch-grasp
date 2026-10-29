@@ -1,0 +1,54 @@
+# The lab apartment, hardcoded from the layout sketch until the ROS map is available.
+# The sketch was read at 1 px = 1 cm, so the room is 7.80 m x 5.37 m; scale it here if
+# the real dimensions differ. Coordinates are metres, x to the right and y up, with the
+# origin at the bottom-left corner of the room.
+#
+# Each location has a zone rectangle [centre x, centre y, width (x), depth (y)] and an
+# approach: the side of the rectangle the robot parks on, and how far from the edge.
+# The robot parks with the location on its right, the side the Stretch arm extends to.
+# An explicit {x, y, yaw} approach pose can be given instead.
+#
+# Location names must match config/locations/location_priors.json for objects to spawn
+# there by default (Fridge, Table, Pantry); scenarios can pin objects to any surface.
+# "Human" is where objects end up after a handover: the person works at the Working
+# Surface, so the robot hands objects over there.
+name: apartment
+size: [7.80, 5.37]
+
+walls:
+  - [[0.0, 0.0], [7.80, 0.0]]
+  - [[7.80, 0.0], [7.80, 5.37]]
+  - [[7.80, 5.37], [0.0, 5.37]]
+  - [[0.0, 5.37], [0.0, 0.0]]
+
+locations:
+  Fridge:
+    rect: [3.415, 4.65, 1.57, 1.44]
+    height: 0.9
+    approach: {side: south, standoff: 0.35}
+    color: "#a8cbec"
+    slot_spacing: 0.15
+  Table:
+    rect: [0.975, 1.53, 1.95, 1.44]
+    height: 0.75
+    approach: {side: east, standoff: 0.35}
+    color: "#f2ab85"
+    slot_spacing: 0.15
+  Pantry:
+    rect: [7.125, 2.505, 1.35, 1.43]
+    height: 1.0
+    approach: {side: north, standoff: 0.35}
+    color: "#b5e4a1"
+    slot_spacing: 0.15
+  Human:
+    # Standing at the front edge of the Working Surface; the robot parks to their right.
+    kind: person
+    rect: [1.21, 3.62, 0.5, 0.5]
+    height: 1.0
+    approach: {side: east, standoff: 0.55}
+
+# Furniture the robot plans around but does not fetch from.
+obstacles:
+  - {name: Working Surface, rect: [1.21, 4.65, 2.42, 1.44], color: "#b0b0b0"}
+
+robot_start: {x: 3.0, y: 3.0, yaw: 0.0}
