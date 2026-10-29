@@ -30,12 +30,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 ament_python_install_package(${PROJECT_NAME})
+ament_python_install_package(bt_cooking)
 
 ament_get_python_install_dir(PYTHON_INSTALL_DIR)
+
 install(
   DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_py/${PROJECT_NAME}
   DESTINATION ${PYTHON_INSTALL_DIR}
 )
+
 install(
   FILES
     ${CMAKE_CURRENT_BINARY_DIR}/lib${PROJECT_NAME}__rosidl_generator_c.so
@@ -53,7 +56,6 @@ install(PROGRAMS
   stretch_floor_perception/scan_client.py
   stretch_floor_perception/location_priors_server.py
   stretch_floor_perception/grasp_point.py
-  stretch_floor_perception/grasp_carry.py
   stretch_floor_perception/topdown_grasp_point.py
   stretch_floor_perception/topdown_grasp.py
   stretch_floor_perception/handover.py
@@ -62,11 +64,17 @@ install(PROGRAMS
   stretch_floor_perception/place_object.py
   stretch_floor_perception/scan_surface.py
   stretch_floor_perception/define_surface.py
+  bt_cooking/run_cooking_task.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY
   launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 
