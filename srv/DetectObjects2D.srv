@@ -1,0 +1,5 @@
+# Run the 2D detector only (no depth, VLM or 3D filtering) on one colour frame.
+sensor_msgs/CompressedImage color_msg
+---
+# Boxes are in the pixel coordinates of color_msg as received (not rotated).
+vision_msgs/Detection2DArray detections

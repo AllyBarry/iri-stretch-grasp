@@ -1,5 +1,11 @@
 geometry_msgs/PointStamped target
 float32 assumed_width_m
+# Detector label of the object to grasp. When set, the grasp is confirmed by
+# detecting this label in the gripper and no longer at the pick location.
+string expected_label
+# Detector's 3D box around the object, in target.header.frame_id. The x axis of
+# its orientation is the object's long axis. Leave the size zero if unknown.
+vision_msgs/BoundingBox3D bbox
 ---
 bool success
 string message

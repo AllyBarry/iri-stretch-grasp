@@ -21,7 +21,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectedObject3D.msg"
   "msg/DetectedObject3DArray.msg"
   "srv/DetectFloorObjects3D.srv"
+  "srv/DetectObjects2D.srv"
   "srv/GraspPoint.srv"
+  "srv/ObjectLocations.srv"
+  "srv/ScanSurface.srv"
   SKIP_INSTALL
   DEPENDENCIES builtin_interfaces geometry_msgs sensor_msgs std_msgs vision_msgs
 )
@@ -52,8 +55,16 @@ install(
 install(PROGRAMS
   stretch_floor_perception/floor_object_detector.py
   stretch_floor_perception/scan_client.py
+  stretch_floor_perception/location_priors_server.py
   stretch_floor_perception/grasp_point.py
   stretch_floor_perception/topdown_grasp_point.py
+  stretch_floor_perception/topdown_grasp.py
+  stretch_floor_perception/handover.py
+  stretch_floor_perception/carry_pose.py
+  stretch_floor_perception/verify_grasp_server.py
+  stretch_floor_perception/place_object.py
+  stretch_floor_perception/scan_surface.py
+  stretch_floor_perception/define_surface.py
   bt_cooking/run_cooking_task.py
   stretch_sim/run_sim.py
   stretch_sim/log_view.py
