@@ -103,6 +103,8 @@
               aria-label="The robot's ROS domain ID"></label>
             <button class="btn" id="btn-robot-link">Connect to robot</button>
           </div>
+          <button class="btn danger-outline hidden" id="btn-release-runstop"
+            title="The robot is runstopped and will not move until this is released">Release runstop</button>
         </div>
         <div class="sub ros-status" id="ros-status"></div>
       </section>
@@ -117,7 +119,7 @@
           <button class="btn" data-cmd='{"cmd":"grasp_best"}'>Grasp best <kbd>g</kbd></button>
           <button class="btn" data-cmd='{"cmd":"handover"}'>Hand over <kbd>o</kbd></button>
           <button class="btn" data-cmd='{"cmd":"mode"}'>Toggle mode <kbd>m</kbd></button>
-          <button class="btn danger-outline wide" data-cmd='{"cmd":"cancel"}'>Cancel everything <kbd>c</kbd></button>
+          <button class="btn danger-outline wide" id="btn-cancel" data-cmd='{"cmd":"cancel"}'>Cancel everything <kbd>c</kbd></button>
         </div>
         <div class="ctl-label">Action success rate <span class="sub" id="success-value"></span></div>
         <input type="range" id="success-rate" min="0" max="100" step="5" aria-label="Action success rate">

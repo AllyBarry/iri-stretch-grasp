@@ -76,6 +76,12 @@ class StretchState(State):
             "target_detection",
             "target_found",
             "holding_object",
+            "gripper_occupied",
+            "pick/location",
+            "pick/object",
+            "pick/point_map",
+            "pick/point_base",
+            "pick/size",
         ]
 
         var_ranges = (var_ranges or {}) | {
@@ -106,6 +112,18 @@ class StretchState(State):
                 self.get_objects(),
                 allow_none=True
             ),
+            "gripper_occupied": BooleanRange(),
+            "pick/location": CategoricalRange(
+                self._LOCATIONS,
+                allow_none=True
+            ),
+            "pick/object": CategoricalRange(
+                self.get_objects(),
+                allow_none=True
+            ),
+            "pick/point_map": AnyRange(list),
+            "pick/point_base": AnyRange(list),
+            "pick/size": AnyRange(list),
         }
 
         semantic_dict = (semantic_dict or {}) | {
@@ -117,11 +135,18 @@ class StretchState(State):
             "target_detection": "Where the robot saw the target object in its most recent search, or None if it was not seen",
             "target_found": "Whether or not the robot saw the target object in its most recent search",
             "holding_object": "The object the robot is holding in its gripper, or None if the gripper is empty",
+            "gripper_occupied": "Whether something is in the gripper, by the grasp servers' checks: the target, or a wrongly picked object",
+            "pick/location": "The location of the robot's last grasp, where a wrongly picked object is put back",
+            "pick/object": "The object the robot meant to pick up in its last grasp",
+            "pick/point_map": "Where the last grasp was aimed, [x, y, z] in the map frame, or None if unknown",
+            "pick/point_base": "Where the last grasp was aimed, [x, y, z] in base_link when it was sent",
+            "pick/size": "The size [x, y, z] of the detection the last grasp was aimed at",
         }
 
         skill_defaults = {
             "scan/objects": [],
             "target_found": False,
+            "gripper_occupied": False,
         }
 
         # Confidence in locations

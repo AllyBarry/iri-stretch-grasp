@@ -202,6 +202,57 @@ class PerceptionAndManipulationTest(unittest.TestCase):
         self.assertTrue(any("lift above" in m for m in phases), phases)
         self.assertTrue(any("lower" in m for m in phases), phases)
 
+    def test_put_back_where_it_was_picked(self):
+        sim = make_sim()
+        drive_to(sim, "Fridge")
+        det = max(self._scan(sim), key=lambda d: d.centroid[1])
+        name, (wx, wy) = det.true_object, det.world_xy
+        run(sim, sim.grasp(det.centroid))
+        self.assertEqual(sim.robot.held, name)
+        # The grasp retracted the arm; reach back out over the pick point and set it down.
+        lx, ly = world_to_local(sim.robot.pose, wx, wy)
+        arm = run(sim, sim.move_arm(lift=sim.robot.lift + 0.05, translate=lx,
+                                    extension=-ly - sim.geom.arm_min_reach))
+        self.assertEqual(arm.status, OpStatus.SUCCEEDED)
+        self.assertEqual(sim.robot.held, name)
+        op = run(sim, sim.place())
+        self.assertEqual(op.status, OpStatus.SUCCEEDED, op.message)
+        obj = sim.objects[name]
+        self.assertIsNone(sim.robot.held)
+        self.assertEqual(obj.location, "Fridge")
+        self.assertAlmostEqual(obj.x, wx, places=2)
+        self.assertAlmostEqual(obj.y, wy, places=2)
+        self.assertAlmostEqual(obj.z, WORLD.locations["Fridge"].height + obj.size / 2.0, places=3)
+
+    def test_place_needs_a_surface_and_an_object(self):
+        sim = make_sim()
+        self.assertEqual(sim.place().status, OpStatus.FAILED)              # nothing held
+        drive_to(sim, "Fridge")
+        det = max(self._scan(sim), key=lambda d: d.centroid[1])
+        run(sim, sim.grasp(det.centroid))
+        sim.robot.pose = Pose2D(5.0, 1.0, 0.0)                             # over open floor
+        op = sim.place()
+        self.assertEqual(op.status, OpStatus.FAILED)
+        self.assertIn("surface", op.message)
+        self.assertEqual(sim.robot.held, det.true_object)
+
+    def test_stowing_the_gripper_keeps_a_held_object(self):
+        sim = make_sim()
+        drive_to(sim, "Fridge")
+        det = max(self._scan(sim), key=lambda d: d.centroid[1])
+        run(sim, sim.grasp(det.centroid))
+        size = sim.objects[det.true_object].size
+        op = run(sim, sim.move_arm(aperture=0.0, wrist={"joint_wrist_yaw": 3.4}))   # as the stow alias closes it
+        self.assertEqual(op.status, OpStatus.SUCCEEDED)
+        self.assertEqual(sim.robot.held, det.true_object)
+        self.assertAlmostEqual(sim.robot.aperture, size)
+
+    def test_arm_moves_need_position_mode(self):
+        sim = make_sim()
+        sim.set_driver_mode("navigation")
+        self.assertEqual(sim.move_arm(translate=0.1).status, OpStatus.FAILED)
+        self.assertTrue(sim.violations)
+
     def test_bad_grasp_directions_are_rejected(self):
         with self.assertRaises(ValueError):
             make_sim(grasp_directions={"Feta": "sideways"})
@@ -383,7 +434,7 @@ class BtRunnerTest(unittest.TestCase):
             self.assertEqual(bt.wait(10), 0)
             for _ in range(100):           # the output thread may still be emitting
                 lines = [e.message for e in sim.log.events if e.kind == BT]
-                if len(lines) == 2:
+                if len(lines) == 2 and bt.returncode is not None:   # the exit code is recorded after the output
                     break
                 import time; time.sleep(0.02)
             self.assertIn("tree main_demo_loop recipe greek_salad", lines)
@@ -543,8 +594,14 @@ places:
             places = read_places(str(path))
         poses, missing = location_poses_from_places(places, list(WORLD.locations))
         self.assertEqual(poses["Pantry"], {"x": 0.9671, "y": -1.0007, "yaw": 2.8016})
-        self.assertEqual(poses["Human"], places["handover"])
+        # Human parks a quarter turn left of the place, so the arm (on the right) faces where it faced.
+        handover = places["handover"]
+        self.assertEqual((poses["Human"]["x"], poses["Human"]["y"]), (handover["x"], handover["y"]))
+        self.assertAlmostEqual(math.cos(poses["Human"]["yaw"]), math.cos(handover["yaw"] + math.pi / 2), places=3)
+        self.assertAlmostEqual(math.sin(poses["Human"]["yaw"]), math.sin(handover["yaw"] + math.pi / 2), places=3)
         self.assertEqual(missing, ["Fridge (no place 'fridge')"])
+        poses, _ = location_poses_from_places(places, list(WORLD.locations), yaw_offsets_deg={"Human": 0.0})
+        self.assertEqual(poses["Human"], handover)
         poses, missing = location_poses_from_places(places, list(WORLD.locations), {"Fridge": "home"})
         self.assertEqual(poses["Fridge"], places["home"])
         self.assertEqual(missing, [])
@@ -573,19 +630,49 @@ places:
         self.assertEqual(sim.objects["Feta"].location, "Pantry")
         self.assertEqual([d.true_object for d in sim.last_detections], ["Feta"])
 
+        # The grasp is not animated: the object is held once the BT reports the real grasp done.
         mirror.on_bt_state(self._state("GraspObjectNode", **go, target_detection=seen[0], **{"scan/objects": seen}))
-        grasp = next(op for op in sim.ops if op.name == "grasp")
-        self.assertEqual(grasp.args["direction"], "top")
+        self.assertFalse(any(op.name == "grasp" for op in sim.ops))
+        self.assertIsNone(sim.robot.held)
         self._settle(sim)
         mirror.on_bt_state(self._state("NavigateToHumanNode", **go, holding_object="Feta", **{"scan/objects": seen}))
         self.assertEqual(sim.robot.held, "Feta")
         self._settle(sim)
 
+        # The handover is not shown until the real robot reports it done.
         mirror.on_bt_state(self._state("HandoverNode", **go, holding_object="Feta", **{"scan/objects": seen}))
-        self.assertTrue(any(op.name == "handover" for op in sim.ops))
+        self.assertFalse(any(op.name == "handover" for op in sim.ops))
+        self.assertEqual(sim.robot.held, "Feta")
         mirror.on_bt_state(self._state("DecideTargetObjectNode", **go, **{"scan/objects": seen, "confidence/Feta/Human": 1.0}))
         self.assertIsNone(sim.robot.held)
         self.assertEqual(sim.objects["Feta"].location, "Human")
+
+    def test_failed_real_handover_keeps_the_object(self):
+        # The BT's handover failed (e.g. no /handover on the robot): it still holds the object.
+        from stretch_sim.robot_link import RobotMirror
+        sim = make_sim(spawn={"objects": "all", "place": {"Feta": "Fridge"}})
+        mirror = RobotMirror(sim)
+        held = dict(target_object="Feta", target_location="Fridge", holding_object="Feta")
+        mirror.on_bt_state(self._state("NavigateToHumanNode", **held))
+        self._settle(sim)
+        mirror.on_bt_state(self._state("HandoverNode", **held))
+        mirror.on_bt_state(self._state("DecideTargetObjectNode", **held))
+        self.assertEqual(sim.robot.held, "Feta")
+        self.assertNotEqual(sim.objects["Feta"].location, "Human")
+
+    def test_failed_real_grasp_never_shows_the_object_held(self):
+        from stretch_sim.robot_link import RobotMirror
+        sim = make_sim(spawn={"objects": "all", "place": {"Feta": "Fridge"}})
+        mirror = RobotMirror(sim)
+        go = dict(target_object="Feta", target_location="Fridge")
+        mirror.on_bt_state(self._state("NavigateToPlaceNode", **go))
+        self._settle(sim)
+        mirror.on_bt_state(self._state("GraspObjectNode", **go))
+        self._settle(sim)
+        self.assertIsNone(sim.robot.held)                                   # still grasping for real
+        mirror.on_bt_state(self._state("DecideTargetObjectNode", **go))     # the real grasp failed
+        self.assertIsNone(sim.robot.held)
+        self.assertEqual(sim.objects["Feta"].location, "Fridge")
 
     def test_mirror_corrects_the_gripper_to_the_real_robot(self):
         from stretch_sim.robot_link import RobotMirror

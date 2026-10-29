@@ -116,11 +116,104 @@ class RosBridgeTest(unittest.TestCase):
         self.assertEqual(result.result().status, 4)    # GoalStatus.STATUS_SUCCEEDED
         self.assertAlmostEqual(self.sim.robot.pose.x, a.x, places=2)
 
+    def test_scan_surface(self):
+        try:
+            from stretch_floor_perception.srv import ScanSurface
+        except ImportError:
+            self.skipTest("stretch_floor_perception interfaces not built")
+        from stretch_sim.geometry import Pose2D
+        fridge = self.sim.world.locations["Fridge"].approach
+        with self.sim.lock:
+            self.sim.robot.pose = Pose2D(fridge.x, fridge.y, fridge.yaw)
+            self.sim.set_driver_mode("navigation")     # as after the BT drives there: head goals still work
+            self.sim.robot.head_pan = 0.0              # looking ahead, away from the fridge
+        res = self._call(ScanSurface, "/scan_surface", ScanSurface.Request(surface_name="Fridge"))
+        self.assertTrue(res.success, res.message)
+        on_fridge = sorted(o.label for o in self.sim.objects.values() if o.location == "Fridge")
+        self.assertEqual(sorted(d.class_name for d in res.detections.detections), on_fridge)
+        self.assertEqual(res.views_scanned, 1)
+        self.assertLess(self.sim.robot.head_pan, -1.0)  # turned to the fridge, on the arm side
+
+        res = self._call(ScanSurface, "/scan_surface", ScanSurface.Request(surface_name="fridge", target_label=on_fridge[0]))
+        self.assertTrue(res.found)
+        self.assertEqual(res.target.class_name, on_fridge[0])
+
+        res = self._call(ScanSurface, "/scan_surface", ScanSurface.Request(surface_name="garage"))
+        self.assertFalse(res.success)
+        self.assertIn("no surface 'garage'", res.message)
+
     def test_sim_offers_only_what_the_robot_offers(self):
         from stretch_sim.ros_bridge import ROBOT_INTERFACES
         self.assertLessEqual(set(self.ros.bridge.offered) - {"/camera/... (placeholder images)"}, ROBOT_INTERFACES)
         with self.assertRaises(ValueError):
             self.ros.bridge._service(Trigger, "/not_on_the_robot", lambda req, res: res)
+
+
+class FakeRobot:
+    '''The parts of the robot the viewer's Stop and Cancel use: the driver's stop and runstop, and Nav2.'''
+    def __init__(self, domain_id, NavigateToPose):
+        import threading
+        from rclpy.action import ActionClient, ActionServer, CancelResponse
+        from rclpy.callback_groups import ReentrantCallbackGroup
+        from rclpy.executors import MultiThreadedExecutor
+        from std_msgs.msg import Bool
+        from std_srvs.srv import SetBool
+        self.NavigateToPose = NavigateToPose
+        self.context = rclpy.Context()
+        rclpy.init(context=self.context, domain_id=domain_id)
+        self.node = Node("fake_stretch", context=self.context)
+        group = ReentrantCallbackGroup()
+        self.stops, self.runstops = 0, []
+        self.goal_running = self.goal_canceled = False
+        self._runstop_pub = self.node.create_publisher(Bool, "/is_runstopped", 10)
+
+        def stop(req, res):
+            self.stops += 1
+            res.success = True
+            return res
+
+        def runstop(req, res):
+            self.runstops.append(req.data)
+            self._runstop_pub.publish(Bool(data=req.data))
+            res.success = True
+            return res
+
+        def navigate(goal_handle):
+            self.goal_running = True
+            while not goal_handle.is_cancel_requested:
+                time.sleep(0.05)
+            self.goal_canceled = True
+            goal_handle.canceled()
+            return NavigateToPose.Result()
+
+        self.node.create_service(Trigger, "/stop_the_robot", stop, callback_group=group)
+        self.node.create_service(SetBool, "/runstop", runstop, callback_group=group)
+        ActionServer(self.node, NavigateToPose, "/navigate_to_pose", execute_callback=navigate,
+                     cancel_callback=lambda gh: CancelResponse.ACCEPT, callback_group=group)
+        self.client = ActionClient(self.node, NavigateToPose, "/navigate_to_pose", callback_group=group)
+        self.executor = MultiThreadedExecutor(context=self.context)
+        self.executor.add_node(self.node)
+        self._thread = threading.Thread(target=self.executor.spin, daemon=True)
+        self._thread.start()
+
+    def send_navigation_goal(self):
+        self.client.wait_for_server(timeout_sec=5.0)
+        return self.client.send_goal_async(self.NavigateToPose.Goal())
+
+    @staticmethod
+    def wait_for(condition, timeout_s):
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            if condition():
+                return True
+            time.sleep(0.05)
+        return condition()
+
+    def stop(self):
+        self.executor.shutdown()
+        self._thread.join(timeout=5.0)
+        self.node.destroy_node()
+        self.context.try_shutdown()
 
 
 @unittest.skipIf(rclpy is None, "rclpy not available")
@@ -172,6 +265,38 @@ class RosLinkTest(unittest.TestCase):
         self.assertIn("/navigate_to_pose", self.controller.ros_status["offered"])
         self.assertEqual(os.environ.get("ROS_DOMAIN_ID"), self.env["ROS_DOMAIN_ID"])
         self.assertIsNone(self.controller.bt.location_poses)
+
+    def test_stop_and_cancel_stop_the_real_robot(self):
+        try:
+            from nav2_msgs.action import NavigateToPose
+        except ImportError:
+            self.skipTest("nav2_msgs not installed")
+        robot = FakeRobot(self.ROBOT_DOMAIN, NavigateToPose)
+        try:
+            self.controller.execute({"cmd": "connect"})
+            goal = robot.send_navigation_goal()           # as the BT would, before it is stopped
+            self.assertTrue(robot.wait_for(lambda: robot.goal_running, 5.0), "the fake robot never got the goal")
+
+            message = self.controller.execute({"cmd": "bt_stop"})
+            self.assertIn("/navigate_to_pose: canceled 1 goal(s)", message)
+            self.assertTrue(robot.wait_for(lambda: robot.goal_canceled, 5.0))
+            self.assertEqual(robot.stops, 1)
+            self.assertEqual(robot.runstops, [])
+            self.assertIn("follow_joint_trajectory", message)  # not offered by the fake robot; the stop still worked
+
+            self.controller.execute({"cmd": "cancel"})
+            self.assertEqual(robot.runstops, [True])
+            self.assertTrue(robot.wait_for(lambda: self.controller.ros_status["runstopped"] is True, 5.0))
+            self.controller.execute({"cmd": "release_runstop"})
+            self.assertEqual(robot.runstops, [True, False])
+            self.assertTrue(robot.wait_for(lambda: self.controller.ros_status["runstopped"] is False, 5.0))
+            del goal
+        finally:
+            robot.stop()
+
+    def test_respawn_never_runstops_the_robot(self):
+        self.link.start_robot()
+        self.controller.execute({"cmd": "respawn", "seed": 1})    # would fail if it called the robot's runstop
 
     def test_unreachable_robot_leaves_the_sim_running(self):
         from stretch_sim.controller import CommandError

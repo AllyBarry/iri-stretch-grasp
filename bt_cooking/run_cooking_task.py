@@ -96,6 +96,7 @@ def main():
         tree=args.tree,
         recipe=args.recipe,
         max_passes=args.max_passes,
+        disable_logging=True
     )
 
     task.run(display_tree=args.display_tree, loop_until_done=args.loop_until_done)

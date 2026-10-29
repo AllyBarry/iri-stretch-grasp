@@ -30,12 +30,14 @@ _ROS_ENV = ("ROS_DOMAIN_ID", "ROS_AUTOMATIC_DISCOVERY_RANGE", "ROS_LOCALHOST_ONL
 class RosLink:
     def __init__(self, sim: KinematicSimulator, run_dir: Path, bt_command: Optional[List[str]] = None,
                  ros_network: bool = False, places: Optional[str] = None,
-                 place_names: Optional[Dict[str, str]] = None, domain_id: Optional[int] = None):
+                 place_names: Optional[Dict[str, str]] = None, domain_id: Optional[int] = None,
+                 yaw_offsets_deg: Optional[Dict[str, float]] = None):
         self.sim = sim
         self.run_dir = Path(run_dir)
         self.ros_network = ros_network
         self.places = places or DEFAULT_PLACES      # defaults for connecting to the robot
         self.place_names = place_names or {}
+        self.yaw_offsets_deg = yaw_offsets_deg or {}
         self.domain_id = domain_id
         self.bt = BtProcess(sim, run_dir, bt_command)
         self.mode: Optional[str] = None
@@ -60,6 +62,7 @@ class RosLink:
             status["offered"], status["missing"] = list(self.bridge.offered), list(self.bridge.missing)
         if self.robot is not None:
             status["robot"] = self.robot
+            status["runstopped"] = getattr(self.bridge, "runstopped", None)   # None until the robot reports it
         return status
 
     '''
@@ -89,7 +92,8 @@ class RosLink:
             places = places or self.places
             domain = domain_id if domain_id is not None else self._default_domain()
             found = read_places(places)
-            poses, missing = location_poses_from_places(found, list(self.sim.world.locations), self.place_names)
+            poses, missing = location_poses_from_places(found, list(self.sim.world.locations), self.place_names,
+                                                        self.yaw_offsets_deg)
             path = write_location_poses(poses, self.run_dir / "robot_location_poses.json")
             self.places, self.domain_id = places, domain
 

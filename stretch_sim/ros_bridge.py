@@ -5,8 +5,12 @@ against it unchanged:
 
     /switch_to_{position,navigation,trajectory}_mode  std_srvs/Trigger            (stretch_driver)
     /navigate_to_pose                                  nav2_msgs/NavigateToPose     (Nav2)
-    /stretch_controller/follow_joint_trajectory        control_msgs/FollowJointTrajectory, head joints
+    /stretch_controller/follow_joint_trajectory        control_msgs/FollowJointTrajectory: head, lift,
+                                                       wrist_extension, translate_mobile_base
+    /place_object                                      std_srvs/Trigger             (place_object)
+    /tf                                                map -> odom -> base_link -> link_grasp_center
     /detect_floor_objects_3d                           DetectFloorObjects3D         (floor_object_detector)
+    /scan_surface                                      ScanSurface                  (scan_surface)
     /grasp_carry, /topdown_grasp                       GraspPoint                   (grasp_carry, topdown_grasp)
     /handover                                          std_srvs/Trigger             (handover)
     /stretch/joint_states                              sensor_msgs/JointState       published
@@ -36,8 +40,9 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage, JointState
-from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from action_msgs.srv import CancelGoal
+from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool, Trigger
 
 from stretch_sim.events import INFO
 from stretch_sim.geometry import Pose2D
@@ -46,6 +51,9 @@ from stretch_sim.robot import DRIVER_MODES
 from stretch_sim.simulator import KinematicSimulator
 
 HEAD_JOINTS = ("joint_head_pan", "joint_head_tilt")
+ARM_JOINTS = ("joint_lift", "wrist_extension", "translate_mobile_base")
+WRIST_JOINTS = ("joint_wrist_yaw", "joint_wrist_pitch", "joint_wrist_roll")   # not modelled: logged only
+GRIPPER_JOINT = "joint_gripper_finger_left"
 # Everything the sim may offer: what the robot offers with bringup_stretch.sh running. The
 # sim must not offer anything else, or a BT that works against it could fail on the robot.
 ROBOT_INTERFACES = frozenset({
@@ -54,12 +62,17 @@ ROBOT_INTERFACES = frozenset({
     "/navigate_to_pose",                                            # Nav2
     "/stretch_controller/follow_joint_trajectory",                  # stretch_driver
     "/detect_floor_objects_3d",                                     # floor_object_detector
+    "/scan_surface",                                                # scan_surface
     "/grasp_carry", "/topdown_grasp",                               # grasp servers
     "/handover",                                                    # handover (run_once:=false)
+    "/place_object",                                                # place_object
+    "/tf",                                                          # amcl, stretch_driver, robot_state_publisher
     "/stretch/joint_states",                                        # stretch_driver
     "/camera/color/image_raw/compressed", "/camera/aligned_depth_to_color/image_raw/compressedDepth",
     "/camera/color/camera_info",                                    # realsense
 })
+# The real robot's actions, whose goals robot mode cancels when the viewer stops the robot.
+ROBOT_ACTIONS = ("/navigate_to_pose", "/stretch_controller/follow_joint_trajectory")
 BT_STATE_TOPIC = "/cooking_bt/state"     # published by bt_cooking's StretchEnvironment
 BT_RESET_SERVICE = "/cooking_bt/reset_memory"   # offered by bt_cooking's StretchEnvironment
 
@@ -93,6 +106,8 @@ class SimRosBridge(Node):
 
         if serve_robot:
             self._serve_robot(camera_hz, joint_states_hz)
+        else:
+            self._follow_robot()
 
         # Not part of the robot: what a behaviour tree run against the sim believes, for the viewer.
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -111,11 +126,13 @@ class SimRosBridge(Node):
         for mode in DRIVER_MODES:
             self._service(Trigger, f"/switch_to_{mode}_mode", lambda req, res, mode=mode: self._switch_mode(mode, res))
         self._service(Trigger, "/handover", self._handover)
+        self._service(Trigger, "/place_object", self._place)
 
         NavigateToPose = _optional("nav2_msgs.action", "NavigateToPose")
         FollowJointTrajectory = _optional("control_msgs.action", "FollowJointTrajectory")
         DetectFloorObjects3D = _optional("stretch_floor_perception.srv", "DetectFloorObjects3D")
         GraspPoint = _optional("stretch_floor_perception.srv", "GraspPoint")
+        ScanSurface = _optional("stretch_floor_perception.srv", "ScanSurface")
         self._DetectedObject3D = _optional("stretch_floor_perception.msg", "DetectedObject3D")
         self._NavigateToPose, self._FollowJointTrajectory = NavigateToPose, FollowJointTrajectory
 
@@ -131,6 +148,10 @@ class SimRosBridge(Node):
             self._service(DetectFloorObjects3D, "/detect_floor_objects_3d", self._detect)
         else:
             self.missing.append("/detect_floor_objects_3d (stretch_floor_perception interfaces not built)")
+        if ScanSurface and self._DetectedObject3D:
+            self._service(ScanSurface, "/scan_surface", self._scan_surface)
+        else:
+            self.missing.append("/scan_surface (stretch_floor_perception interfaces not built)")
         if GraspPoint:
             self._service(GraspPoint, "/grasp_carry", lambda req, res: self._grasp(req, res, "front"))
             self._service(GraspPoint, "/topdown_grasp", lambda req, res: self._grasp(req, res, "top"))
@@ -144,6 +165,11 @@ class SimRosBridge(Node):
         self.offered += ["/stretch/joint_states", "/camera/... (placeholder images)"]
         self.create_timer(1.0 / joint_states_hz, self._publish_joint_states, callback_group=self.group)
         self.create_timer(1.0 / camera_hz, self._publish_camera, callback_group=self.group)
+        self._check_offered_by_robot("/tf")
+        from tf2_ros import TransformBroadcaster
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.offered.append("/tf")
+        self.create_timer(1.0 / joint_states_hz, self._publish_tf, callback_group=self.group)
 
     def _check_offered_by_robot(self, name: str) -> None:
         if name not in ROBOT_INTERFACES:
@@ -182,6 +208,13 @@ class SimRosBridge(Node):
     '''
     def _switch_mode(self, mode: str, res):
         res.success, res.message = self.sim.set_driver_mode(mode)
+        return res
+
+    def _place(self, req, res):
+        op = self.sim.place()
+        self._wait(op)
+        res.success = op.status == OpStatus.SUCCEEDED
+        res.message = op.message or op.status.value
         return res
 
     def _handover(self, req, res):
@@ -231,16 +264,18 @@ class SimRosBridge(Node):
         return result
 
     '''
-    HEAD
+    HEAD, LIFT, ARM
     '''
     def _follow_trajectory(self, goal_handle):
+        '''Head, lift, arm extension and base translation goals; each joint goes to its last point.'''
         FollowJointTrajectory = self._FollowJointTrajectory
         traj = goal_handle.request.trajectory
         result = FollowJointTrajectory.Result()
-        unsupported = [j for j in traj.joint_names if j not in HEAD_JOINTS]
+        supported = HEAD_JOINTS + ARM_JOINTS + WRIST_JOINTS + (GRIPPER_JOINT,)
+        unsupported = [j for j in traj.joint_names if j not in supported]
         if unsupported or not traj.points:
             result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS if unsupported else FollowJointTrajectory.Result.INVALID_GOAL
-            result.error_string = (f"the sim only moves {list(HEAD_JOINTS)}, not {unsupported}" if unsupported
+            result.error_string = (f"the sim only moves {list(supported)}, not {unsupported}" if unsupported
                                    else "trajectory has no points")
             self.sim.emit(INFO, "ros", f"follow_joint_trajectory rejected: {result.error_string}")
             goal_handle.abort()
@@ -248,43 +283,118 @@ class SimRosBridge(Node):
 
         last = traj.points[-1]
         target = dict(zip(traj.joint_names, last.positions))
-        op = self.sim.move_head(target.get("joint_head_pan", self.sim.robot.head_pan),
-                                target.get("joint_head_tilt", self.sim.robot.head_tilt),
-                                max(_duration_s(last.time_from_start), 0.1))
-        if not self._wait(op, goal_handle):
-            goal_handle.canceled()
-            return result
-        if op.status == OpStatus.SUCCEEDED:
+        ops = []
+        if any(j in target for j in HEAD_JOINTS):
+            ops.append(self.sim.move_head(target.get("joint_head_pan", self.sim.robot.head_pan),
+                                          target.get("joint_head_tilt", self.sim.robot.head_tilt),
+                                          max(_duration_s(last.time_from_start), 0.1)))
+        if any(j in target for j in ARM_JOINTS + WRIST_JOINTS + (GRIPPER_JOINT,)):
+            finger = target.get(GRIPPER_JOINT)
+            ops.append(self.sim.move_arm(
+                lift=target.get("joint_lift"), extension=target.get("wrist_extension"),
+                translate=target.get("translate_mobile_base"),
+                aperture=None if finger is None else 2.0 * finger * self.sim.geom.finger_length_m,
+                wrist={j: target[j] for j in WRIST_JOINTS if j in target}))
+        for op in ops:
+            if not self._wait(op, goal_handle):
+                for other in ops:
+                    self.sim.cancel(other)
+                goal_handle.canceled()
+                return result
+        failed = [op for op in ops if op.status != OpStatus.SUCCEEDED]
+        if not failed:
             result.error_code = FollowJointTrajectory.Result.SUCCESSFUL
             goal_handle.succeed()
         else:
             result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-            result.error_string = op.message
+            result.error_string = "; ".join(op.message for op in failed)
             goal_handle.abort()
         return result
 
     '''
     PERCEPTION, GRASPING
     '''
+    def _detection_msg(self, d, stamp):
+        m = self._DetectedObject3D()
+        m.header.frame_id = "base_link"
+        m.header.stamp = stamp
+        m.class_name = d.label
+        m.detector_class_name = d.label
+        m.pick_up = "yes"
+        m.grasp_direction = d.grasp_direction
+        m.score = float(d.score)
+        m.centroid.x, m.centroid.y, m.centroid.z = (float(v) for v in d.centroid)
+        m.bbox3d.center.position.x, m.bbox3d.center.position.y, m.bbox3d.center.position.z = (float(v) for v in d.centroid)
+        m.bbox3d.center.orientation.w = 1.0
+        m.bbox3d.size.x, m.bbox3d.size.y, m.bbox3d.size.z = (float(v) for v in d.size)
+        return m
+
     def _detect(self, req, res):
         stamp = self.get_clock().now().to_msg()
         res.detections.header.frame_id = "base_link"
         res.detections.header.stamp = stamp
-        for d in self.sim.detect():
-            m = self._DetectedObject3D()
-            m.header.frame_id = "base_link"
-            m.header.stamp = stamp
-            m.class_name = d.label
-            m.detector_class_name = d.label
-            m.pick_up = "yes"
-            m.grasp_direction = d.grasp_direction
-            m.score = float(d.score)
-            m.centroid.x, m.centroid.y, m.centroid.z = (float(v) for v in d.centroid)
-            m.bbox3d.center.position.x, m.bbox3d.center.position.y, m.bbox3d.center.position.z = (float(v) for v in d.centroid)
-            m.bbox3d.center.orientation.w = 1.0
-            m.bbox3d.size.x, m.bbox3d.size.y, m.bbox3d.size.z = (float(v) for v in d.size)
-            res.detections.detections.append(m)
+        res.detections.detections = [self._detection_msg(d, stamp) for d in self.sim.detect()]
         return res
+
+    def _scan_surface(self, req, res):
+        '''
+        As the scan_surface node: look at the named surface, detect, and keep only what is
+        on it. The real node sweeps the head over several views; the sim's scan covers
+        the whole surface, so one head move (one view) stands for the sweep.
+        '''
+        surfaces = {"_".join(n.lower().split()): n for n, loc in self.sim.world.locations.items() if loc.kind == "surface"}
+        name = "_".join(req.surface_name.strip().lower().split())
+        location = surfaces.get(name)
+        if name and location is None:
+            res.success = False
+            res.message = f"no surface '{name}' (known: {', '.join(sorted(surfaces)) or 'none'})"
+            self.sim.emit(INFO, "ros", f"scan_surface: {res.message}")
+            return res
+
+        pan, tilt = self._head_towards(location)
+        op = self.sim.move_head(pan, tilt, 1.0)
+        self._wait(op)
+        if op.status != OpStatus.SUCCEEDED:
+            res.success = False
+            res.message = f"head goal pan={pan:.2f} tilt={tilt:.2f} failed: {op.message}"
+            return res
+        detections = self.sim.detect()
+        if location is not None:
+            rect = self.sim.world.locations[location].rect
+            detections = [d for d in detections if rect.contains(*d.world_xy)]
+        stamp = self.get_clock().now().to_msg()
+        msgs = [self._detection_msg(d, stamp) for d in detections]
+        res.views_scanned = 1
+        res.detections.header.frame_id = "base_link"
+        res.detections.header.stamp = stamp
+        res.detections.detections = msgs
+        target = req.target_label.strip().lower()
+        if target:
+            matches = [m for m in msgs if target in m.class_name.lower() or target in m.detector_class_name.lower()]
+            if matches:
+                res.found = True
+                res.target = max(matches, key=lambda m: m.score)
+        res.success = True
+        names = ", ".join(f"'{m.class_name}'" for m in msgs) or "none"
+        where = f" on '{name}'" if name else ""
+        if target:
+            res.message = (f"found '{res.target.class_name}'{where}" if res.found
+                           else f"'{target}' not found{where} in 1 views; saw {names}")
+        else:
+            res.message = f"{len(msgs)} objects{where} in 1 views: {names}"
+        return res
+
+    def _head_towards(self, location):
+        '''Head pan and tilt that look at a location (the arm side, if none), within the head's pan range.'''
+        r = self.sim.robot.pose
+        if location is None:
+            return -math.pi / 2.0, -0.7
+        c = self.sim.world.locations[location].rect
+        pan = math.atan2(c.cy - r.y, c.cx - r.x) - r.yaw
+        pan = (pan + math.pi) % (2.0 * math.pi) - math.pi
+        if pan > 1.5:       # the pan joint reaches -3.9..1.5 rad
+            pan -= 2.0 * math.pi
+        return pan, -0.7
 
     def _grasp(self, req, res, direction: str):
         '''
@@ -322,15 +432,99 @@ class SimRosBridge(Node):
 
     def reset_bt_memory(self, timeout_s: float = 5.0):
         '''Asks a running behaviour tree to forget its beliefs. Returns (success, message).'''
-        if not self._bt_reset.wait_for_service(timeout_sec=min(timeout_s, 2.0)):
-            return False, f"no behaviour tree offers {BT_RESET_SERVICE}"
+        response = self._call(self._bt_reset, Trigger.Request(), timeout_s)
+        if isinstance(response, str):
+            return False, response.replace("not offered", "offered by no behaviour tree")
+        return bool(response.success), response.message
+
+    def _call(self, client, request, timeout_s: float):
+        '''Calls a service and waits for it; returns the response, or a string saying why there is none.'''
+        if not client.wait_for_service(timeout_sec=min(timeout_s, 2.0)):
+            return f"{client.srv_name} not offered"
         done = threading.Event()
-        future = self._bt_reset.call_async(Trigger.Request())
+        future = client.call_async(request)
         future.add_done_callback(lambda f: done.set())
         if not done.wait(timeout_s):
-            self._bt_reset.remove_pending_request(future)
-            return False, f"no answer from {BT_RESET_SERVICE} within {timeout_s:.0f} s"
-        response = future.result()
+            client.remove_pending_request(future)
+            return f"no answer from {client.srv_name} within {timeout_s:.0f} s"
+        return future.result()
+
+    '''
+    STOPPING THE REAL ROBOT (robot mode)
+    '''
+    def _follow_robot(self) -> None:
+        '''Clients for stopping the real robot, and its runstop state. Nothing is offered.'''
+        self._cancel_clients = [self.create_client(CancelGoal, f"{name}/_action/cancel_goal", callback_group=self.group)
+                                for name in ROBOT_ACTIONS]
+        self._stop_client = self.create_client(Trigger, "/stop_the_robot", callback_group=self.group)
+        self._runstop_client = self.create_client(SetBool, "/runstop", callback_group=self.group)
+        self.runstopped: Optional[bool] = None
+        self.create_subscription(Bool, "/is_runstopped", self._on_runstopped, 10, callback_group=self.group)
+
+    def _on_runstopped(self, msg) -> None:
+        if msg.data != self.runstopped:
+            self.runstopped = msg.data
+            self.sim.emit(INFO, "robot", "the real robot is runstopped" if msg.data else "the real robot's runstop is released")
+
+    def _call_all(self, calls, timeout_s: float) -> list:
+        '''_call for each (client, request) at once, so one missing service does not delay the others.'''
+        results = [None] * len(calls)
+
+        def call(i, client, request):
+            results[i] = self._call(client, request, timeout_s)
+        threads = [threading.Thread(target=call, args=(i, c, r), daemon=True) for i, (c, r) in enumerate(calls)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout_s + 3.0)
+        return [r if r is not None else "no answer" for r in results]
+
+    @staticmethod
+    def _cancel_summary(client, response) -> str:
+        action = client.srv_name.rsplit("/_action/", 1)[0]
+        if isinstance(response, str):
+            return response
+        if response.return_code == CancelGoal.Response.ERROR_NONE:
+            return f"{action}: canceled {len(response.goals_canceling)} goal(s)"
+        if response.return_code == CancelGoal.Response.ERROR_REJECTED and not response.goals_canceling:
+            return f"{action}: no goals"
+        return f"{action}: cancel failed (code {response.return_code})"
+
+    def cancel_robot_goals(self, timeout_s: float = 3.0) -> List[str]:
+        '''Cancels every goal of the robot's actions (Nav2, trajectories), whoever sent it.'''
+        # A zero goal id and time cancels all goals.
+        results = self._call_all([(c, CancelGoal.Request()) for c in self._cancel_clients], timeout_s)
+        return [self._cancel_summary(c, r) for c, r in zip(self._cancel_clients, results)]
+
+    def stop_robot(self, runstop: bool = False, timeout_s: float = 3.0):
+        '''
+        Stops the real robot: cancels its action goals and halts the current motion, and
+        with runstop also runstops it, which is the only way to stop a grasp, handover or
+        scan service part way (they have no cancel). All at once. Returns (success, message).
+        '''
+        calls = [(c, CancelGoal.Request()) for c in self._cancel_clients]
+        calls.append((self._stop_client, Trigger.Request()))
+        if runstop:
+            calls.insert(0, (self._runstop_client, SetBool.Request(data=True)))    # sent first: it stops everything
+        results = self._call_all(calls, timeout_s)
+        parts, ok = [], True
+        if runstop:
+            response = results.pop(0)
+            ok &= not isinstance(response, str) and response.success
+            parts.append(response if isinstance(response, str) else "runstopped")
+        stop = results.pop()
+        parts += [self._cancel_summary(c, r) for c, r in zip(self._cancel_clients, results)]
+        ok &= not isinstance(stop, str) and stop.success
+        parts.append(stop if isinstance(stop, str) else f"/stop_the_robot: {stop.message or 'stopped'}")
+        message = "; ".join(parts)
+        self.sim.emit(INFO, "robot", f"{'runstopped' if runstop else 'stopped'} the real robot: {message}", ok=ok)
+        return ok, message
+
+    def release_runstop(self, timeout_s: float = 3.0):
+        response = self._call(self._runstop_client, SetBool.Request(data=False), timeout_s)
+        if isinstance(response, str):
+            return False, response
+        self.sim.emit(INFO, "robot", "released the real robot's runstop")
         return bool(response.success), response.message
 
     def _on_bt_state(self, msg) -> None:
@@ -351,13 +545,35 @@ class SimRosBridge(Node):
             r = self.sim.robot
             finger = r.finger_joint_rad(self.sim.geom)
             values = {"joint_head_pan": r.head_pan, "joint_head_tilt": r.head_tilt, "joint_lift": r.lift,
-                      "joint_arm": r.arm_extension, "joint_gripper_finger_left": finger,
+                      "wrist_extension": r.arm_extension, "joint_gripper_finger_left": finger,
                       "joint_gripper_finger_right": finger}
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = list(values)
         msg.position = [float(v) for v in values.values()]
         self.joint_pub.publish(msg)
+
+    def _publish_tf(self):
+        '''
+        The frames the robot's TF has that the BT uses: map -> odom (identity: the sim
+        does not drift), odom -> base_link (the robot's pose) and base_link ->
+        link_grasp_center (the gripper: out to the right by the arm's reach, at lift height).
+        '''
+        from geometry_msgs.msg import TransformStamped
+        with self.sim.lock:
+            r = self.sim.robot
+            pose, reach, lift = r.pose.copy(), self.sim.geom.arm_min_reach + r.arm_extension, r.lift
+        stamp = self.get_clock().now().to_msg()
+        frames = (("map", "odom", 0.0, 0.0, 0.0, 0.0), ("odom", "base_link", pose.x, pose.y, 0.0, pose.yaw),
+                  ("base_link", "link_grasp_center", 0.0, -reach, lift, 0.0))
+        msgs = []
+        for parent, child, x, y, z, yaw in frames:
+            t = TransformStamped()
+            t.header.stamp, t.header.frame_id, t.child_frame_id = stamp, parent, child
+            t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = x, y, z
+            t.transform.rotation.z, t.transform.rotation.w = math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+            msgs.append(t)
+        self.tf_broadcaster.sendTransform(msgs)
 
     def _publish_camera(self):
         stamp = self.get_clock().now().to_msg()

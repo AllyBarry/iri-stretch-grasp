@@ -596,8 +596,11 @@ class ScanSurfaceNode(Node):
             self.active_surface = None
             self._publish_surfaces()
             self.scan_lock.release()
-        log = self.get_logger().info if response.success else self.get_logger().error
-        log(response.message)
+        # Separate calls: rclpy refuses one call site logging at different severities.
+        if response.success:
+            self.get_logger().info(response.message)
+        else:
+            self.get_logger().error(response.message)
         return response
 
     def _scan(self, request, response):

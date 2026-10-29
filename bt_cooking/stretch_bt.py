@@ -122,6 +122,24 @@ def test_sequence():
     return test_seq
 
 
+def put_back_sequence():
+    '''
+    Puts back what the robot picked up by mistake (the grasp check found the wrong
+    object): drives to where the last grasp picked it up and sets it down there. Each
+    node does nothing unless a wrong object is held. main_demo_loop runs the same nodes
+    at the start of every pass; this tree runs them on their own.
+    '''
+    return py_trees.composites.Sequence(
+        name="put_back_sequence",
+        memory=True,
+        children=[
+            NavigateToPickLocationNode(),
+            MoveOverPickPointNode(),
+            PlaceObjectNode(),
+        ]
+    )
+
+
 def main_demo_loop():
     # Assumes "recipe/name" is already set. If the object is not found, the search
     # lowers that location's confidence, so the next pass searches somewhere else.

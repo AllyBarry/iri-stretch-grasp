@@ -641,6 +641,14 @@ function updateRos(ros) {
     note.classList.remove('hidden');
   }
   const connected = ros.mode === 'robot';
+  if (connected && ros.runstopped) status.textContent += ' · RUNSTOPPED';
+  $('#btn-release-runstop').classList.toggle('hidden', !(connected && ros.runstopped));
+  $('#btn-bt-stop').title = connected
+    ? "Stop the tree and the robot: cancel its goals and halt its motion. A grasp, handover or scan already running on the robot carries on; Cancel everything runstops it."
+    : 'Stop the tree and what it set going';
+  $('#btn-cancel').title = connected
+    ? 'Runstop the real robot and stop the tree. The robot will not move until the runstop is released.'
+    : 'Cancel every running operation';
   link.textContent = connected ? 'Disconnect' : 'Connect to robot';
   link.classList.toggle('danger-outline', connected);
   link.title = connected ? 'Stop the running tree and let the sim play the robot again'
@@ -671,7 +679,8 @@ function updateBt(bt) {
     pill.className = 'pill';
   }
   start.disabled = !available || !bt || bt.running || !world.bt_trees.length;
-  stop.disabled = !bt || !bt.running;
+  // With the real robot, Stop also stops the robot, so it stays available without a tree.
+  stop.disabled = !ros.robot && (!bt || !bt.running);
   $('#btn-reset-memory').disabled = !bt || !bt.running;
   // While a tree runs, the form shows what is running.
   const trees = $('#bt-tree'), recipes = $('#bt-recipe');
@@ -953,6 +962,10 @@ function buildBtControls() {
     link.disabled = false;
     rosKey = '';      // redraw the link controls even if the state has not changed yet
     if (state) updateRos(state.ros);
+  });
+  $('#btn-release-runstop').addEventListener('click', async () => {
+    const res = await sendCommand({cmd: 'release_runstop'});
+    if (res.ok) toast(res.message);
   });
   updateRos(world.ros);
   $('#btn-bt-start').addEventListener('click', () => sendCommand({cmd: 'bt_start', tree: trees.value, recipe: recipes.value || null}));

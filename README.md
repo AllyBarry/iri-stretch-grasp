@@ -283,9 +283,15 @@ these steps:
    `contact_radius_m` of the gripper stay present for `release_delay_s`. If
    the hand leaves early, the wait starts over. If no hand arrives within
    `hand_timeout_s`, the arm retracts while still holding the object.
-5. **Release.** The gripper opens to `release_aperture_m` and the arm stays
-   where it is. With `stow_after_handover:=true`, the node also waits up to
-   `clear_timeout_s` for the hand to move away, then stows the robot.
+5. **Release.** The gripper opens to `release_aperture_m`. The node then waits
+   up to `clear_timeout_s` for the hand to move away and retracts the arm,
+   keeping the lift where it is (`retract_after_handover`, true by default).
+   With `stow_after_handover:=true` it stows the robot instead.
+
+Every motion is checked. If the driver rejects or aborts one, for example
+because the robot is runstopped, the handover fails with that reason. In
+particular, it never reports an object as handed over while it is still in the
+gripper.
 
 ```bash
 # Run once and exit

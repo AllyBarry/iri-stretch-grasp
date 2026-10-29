@@ -86,6 +86,10 @@ def parse_args(argv=None):
     parser.add_argument("--robot-place", metavar="LOCATION=PLACE", action="append", default=[],
                         help="--robot: the place a BT location uses, where it is not the lower-case location name "
                              "(Human uses handover). Repeatable, e.g. --robot-place Fridge=kitchen")
+    parser.add_argument("--robot-place-yaw", metavar="LOCATION=DEG", action="append", default=[],
+                        help="--robot: degrees added to a location's place yaw. Default Human=90: the place faces "
+                             "the person, and turning a quarter turn left puts the arm (on the right) towards them. "
+                             "Repeatable, e.g. --robot-place-yaw Human=-90")
     parser.add_argument("--robot-domain-id", type=int, default=None,
                         help="--robot: the robot's ROS_DOMAIN_ID. Default: $ROS_DOMAIN_ID, else 42")
     parser.add_argument("--export-location-poses", metavar="JSON", default=None,
@@ -100,7 +104,59 @@ def _stop_on_sigterm() -> None:
     signal.signal(signal.SIGTERM, handler)
 
 
+ROS_PYTHON = "/usr/bin/python3"     # the Python the ROS 2 packages are built for
+
+
+def _rclpy_loads(python: str) -> bool:
+    import subprocess
+    try:
+        return subprocess.run([python, "-c", "import rclpy"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _use_ros_python(argv) -> None:
+    '''
+    In a sourced ROS environment, restarts the simulator under the system Python when this
+    one cannot load rclpy, e.g. Miniconda's, whose older C++ runtime ROS 2's libraries do
+    not load with. Without it, the ROS side (--ros, --bt, --robot, the viewer's Connect)
+    and the behaviour tree, which runs with this same Python, all fail.
+    '''
+    if not os.environ.get("ROS_DISTRO") or os.path.realpath(sys.executable) == os.path.realpath(ROS_PYTHON):
+        return
+    try:
+        import rclpy  # noqa: F401 (only whether it loads)
+        return
+    except ImportError:
+        pass
+    if not os.path.exists(ROS_PYTHON) or not _rclpy_loads(ROS_PYTHON):
+        return      # nothing better to switch to: the ROS side reports its error when it starts
+    print(f"{sys.executable} cannot load ROS 2 (rclpy); restarting with {ROS_PYTHON}.", file=sys.stderr, flush=True)
+    os.execv(ROS_PYTHON, [ROS_PYTHON, "-m", "stretch_sim.run_sim"] + list(sys.argv[1:] if argv is None else argv))
+
+
+def _unshadow_installed_packages() -> None:
+    '''
+    Run from the repository root (python3 -m stretch_sim.run_sim), its source folder
+    stretch_floor_perception/ hides the installed package and its generated services, so
+    the sim would offer none of them (detector, scan, grasps). Drop the current directory
+    from the module path when the installed packages are found without it.
+    '''
+    from importlib.machinery import PathFinder
+    here = [p for p in sys.path if p in ("", os.getcwd())]
+    if not here or not os.path.isdir("stretch_floor_perception"):
+        return
+    rest = [p for p in sys.path if p not in here]
+    installed = PathFinder.find_spec("stretch_floor_perception", rest)
+    if installed is None or PathFinder.find_spec("stretch_sim", rest) is None:
+        return      # not installed: the source folders are all there is
+    if os.path.isdir(os.path.join(list(installed.submodule_search_locations)[0], "srv")):
+        sys.path[:] = rest
+
+
 def main(argv=None) -> int:
+    _use_ros_python(argv)
+    _unshadow_installed_packages()
     args = parse_args(argv)
     _stop_on_sigterm()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(message)s")
@@ -139,11 +195,22 @@ def main(argv=None) -> int:
                   file=sys.stderr)
             return 2
         place_names[location] = place
+    yaw_offsets = {}
+    for item in args.robot_place_yaw:
+        location, sep, degrees = item.partition("=")
+        try:
+            if not sep or location not in world.locations:
+                raise ValueError
+            yaw_offsets[location] = float(degrees)
+        except ValueError:
+            print(f"--robot-place-yaw {item}: expected LOCATION=DEG with LOCATION one of {list(world.locations)}",
+                  file=sys.stderr)
+            return 2
     from stretch_sim.ros_link import RosLink
     # The viewer can switch between the sim and the real robot later, whichever starts.
     link = RosLink(sim, run_dir, bt_command=args.bt_command.split() if args.bt_command else None,
                    ros_network=args.ros_network, places=args.robot_places, place_names=place_names,
-                   domain_id=args.robot_domain_id)
+                   domain_id=args.robot_domain_id, yaw_offsets_deg=yaw_offsets)
     try:
         if args.robot:
             link.start_robot()

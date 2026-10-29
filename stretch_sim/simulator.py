@@ -18,9 +18,11 @@ from stretch_sim.world import GRASP_DIRECTIONS, HELD, SimObject, WorldMap, free_
 # outside navigation mode, so Nav2 never gets anywhere).
 DEFAULT_MODE_RULES = {
     "navigate":  ["navigation"],
-    "move_head": ["position"],
+    "move_head": ["position", "navigation", "trajectory"],   # the driver takes head goals in all three
     "grasp":     ["position"],
     "handover":  ["position"],
+    "move_arm":  ["position"],     # the driver only takes base translations in position mode
+    "place":     ["position"],
 }
 
 # How far above the object a top grasp raises the gripper before reaching over it.
@@ -75,6 +77,12 @@ class RobotSimulator(ABC):
               expected_label: str = "") -> Operation: ...
     @abstractmethod
     def handover(self) -> Operation: ...
+    @abstractmethod
+    def move_arm(self, lift: Optional[float] = None, extension: Optional[float] = None,
+                 translate: Optional[float] = None, aperture: Optional[float] = None,
+                 wrist: Optional[Dict[str, float]] = None) -> Operation: ...
+    @abstractmethod
+    def place(self) -> Operation: ...
     @abstractmethod
     def cancel(self, op: Operation) -> None: ...
     @abstractmethod
@@ -490,6 +498,87 @@ class KinematicSimulator(RobotSimulator):
                 op.succeed(message, **result)
 
             op.finish = finish
+            return self._start(op)
+
+    def move_arm(self, lift: Optional[float] = None, extension: Optional[float] = None,
+                 translate: Optional[float] = None, aperture: Optional[float] = None,
+                 wrist: Optional[Dict[str, float]] = None) -> Operation:
+        '''
+        Arm and base joints, as the driver's trajectory goals move them: the lift and arm
+        extension to absolute positions (clamped to their range, as the driver does),
+        then the base along its heading by translate (relative), then the gripper to
+        aperture (never narrower than a held object, which it keeps squeezing). One at a
+        time, in that order. A held object moves with the gripper. The wrist joints are
+        not modelled: they are only logged.
+        '''
+        with self.lock:
+            g = self.geom
+            args = {k: round(v, 3) for k, v in (("lift", lift), ("extension", extension), ("translate", translate),
+                                                 ("aperture", aperture)) if v is not None}
+            if wrist:
+                args["wrist"] = {k: round(v, 3) for k, v in wrist.items()}
+            op = self._register(PhasedOp("move_arm"), **args)
+            failed = self._check_mode(op)
+            if failed:
+                return failed
+            if lift is not None:
+                op.add("lift", PhasedOp.move_joint("lift", min(max(lift, g.lift_min), g.lift_max), 0.15))
+            if translate is not None:
+                remaining = {"m": float(translate)}
+
+                def shift_base(sim, dt):
+                    step = math.copysign(min(abs(remaining["m"]), 0.15 * dt), remaining["m"])
+                    p = sim.robot.pose
+                    p.x += step * math.cos(p.yaw)
+                    p.y += step * math.sin(p.yaw)
+                    remaining["m"] -= step
+                    return abs(remaining["m"]) < 1e-6
+                op.add("translate", shift_base)
+            if extension is not None:
+                op.add("extend", PhasedOp.move_joint("arm_extension", min(max(extension, 0.0), g.arm_max_extension), 0.12))
+            if aperture is not None:
+                held = self.objects[self.robot.held].size if self.robot.held else 0.0
+                target = min(max(aperture, held, 0.0), g.gripper_open_m)
+                op.add("gripper", PhasedOp.move_joint("aperture", target, 0.1))
+            op.finish = lambda sim: op.succeed("moved", lift=round(sim.robot.lift, 3),
+                                               extension=round(sim.robot.arm_extension, 3))
+            return self._start(op)
+
+    def place(self) -> Operation:
+        '''
+        Sets the held object down on the surface under the gripper, as the place_object
+        service does: lower until the surface takes it, open, lift clear. Fails, placing
+        nothing, when there is no surface under the gripper.
+        '''
+        with self.lock:
+            r = self.robot
+            op = self._register(PhasedOp("place"))
+            failed = self._check_mode(op)
+            if failed:
+                return failed
+            if not r.held:
+                return self._reject(op, "the gripper is empty")
+            gx, gy = r.gripper_xy(self.geom)
+            surface = self.world.location_at(gx, gy, margin=0.0)
+            if surface is None or self.world.locations[surface].kind != "surface":
+                return self._reject(op, "Unable to measure the surface under the gripper, so not placing.")
+            loc, obj = self.world.locations[surface], self.objects[r.held]
+            rest_lift = loc.height + obj.size / 2.0     # the gripper holds the object about its centre
+
+            def release(sim, dt):
+                done = PhasedOp.move_joint("aperture", self.geom.gripper_open_m, 0.1)(sim, dt)
+                if done and sim.robot.held:
+                    held = sim.objects[sim.robot.held]
+                    held.location, held.x, held.y, held.z = surface, gx, gy, rest_lift
+                    sim.robot.held = None
+                    op.result["placed"] = held.name
+                return done
+
+            op.add("lower", PhasedOp.move_joint("lift", max(rest_lift, self.geom.lift_min), 0.1))
+            op.add("release", release)
+            op.add("raise", PhasedOp.move_joint("lift", min(rest_lift + 0.05, self.geom.lift_max), 0.1))
+            op.finish = lambda sim: op.succeed(f"placed '{op.result.get('placed')}' on the {surface}",
+                                               surface=surface, point=[round(gx, 3), round(gy, 3)])
             return self._start(op)
 
     def _object_at_gripper(self) -> Optional[SimObject]:

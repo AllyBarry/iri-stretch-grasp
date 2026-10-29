@@ -80,6 +80,7 @@ With `--ros`, the simulator offers the same ROS interface as the robot:
 | `/navigate_to_pose` (action) | Nav2 | path following on the map |
 | `/stretch_controller/follow_joint_trajectory` (action) | stretch_driver | head joints only |
 | `/detect_floor_objects_3d` | floor_object_detector | camera frustum, detections in `base_link`, each with the object's `grasp_direction` |
+| `/scan_surface` | scan_surface | looks at the named surface (one head move stands for the sweep), detects, keeps what is on it; an unknown surface fails |
 | `/grasp_carry` | grasp_carry | front grasp at the requested point |
 | `/topdown_grasp` | topdown_grasp | grasp from above: rises over the object, extends, lowers onto it |
 | `/handover` | handover | hands the held object to the Human |
@@ -135,7 +136,10 @@ ros2 run stretch_floor_perception run_sim.py --robot --bt main_demo_loop --recip
   `places.yaml` (`--robot-places`, a local path or `HOST:PATH` over ssh; default
   `stretch:~/stretch_user/maps/embrace_apartment_map.places.yaml`). Each location uses
   the place with its lower-case name, and Human uses `handover`. Map others with
-  `--robot-place Fridge=kitchen`. A location with no place is reported at startup and
+  `--robot-place Fridge=kitchen`. Human's pose is the place turned 90° left
+  (`--robot-place-yaw Human=90`, the default): the arm extends to the robot's right, so
+  a place saved facing the person becomes one with the arm towards them. A location
+  with no place is reported at startup and
   in the viewer, and the BT cannot navigate there. The poses are written to
   `<run dir>/robot_location_poses.json`.
 - **The mirror** (`robot_link.py`) follows the state the BT publishes on
@@ -146,12 +150,19 @@ ros2 run stretch_floor_perception run_sim.py --robot --bt main_demo_loop --recip
   |---|---|
   | runs a Navigate node | drives to the sim location of the same name |
   | reports a scan (`scan/objects`) | moves the objects it saw to that location, with red rings |
-  | runs the Grasp node | grasps the target object, from the top if its detection says so |
-  | runs the Handover node | hands over what it holds |
-  | changes `holding_object` | the gripper is corrected to match, whatever the animation did |
+  | runs the Grasp node | goes to the location and waits; the object is shown in the gripper only once the BT reports the real grasp confirmed |
+  | runs the Handover node | goes to the Human and waits; the object is shown handed over only once the BT reports the real handover done |
+  | holds something else than the virtual gripper | the gripper is corrected to match, as soon as no animation is running |
 
   When the BT moves on before the animation arrives, the virtual robot jumps to the
   location. Objects the real robot has not seen stay where the sim spawned them.
+- **Stopping the robot:** **Stop** cancels every Nav2 and trajectory goal on the robot
+  (whoever sent it), calls the driver's `/stop_the_robot`, then stops the tree, and
+  cancels goals again in case the tree sent one while shutting down. It works with no
+  tree running too. A grasp, handover or scan service already running on the robot has
+  no cancel and carries on: **Cancel everything** (`c`) also **runstops** the robot
+  (`/runstop`), which stops those too. The robot then will not move until **Release
+  runstop** (shown while runstopped) or its runstop button.
 - **Viewer:** commands that would move the virtual robot (drive, detect, grasp,
   handover, mode, fetch, tour, success rate) are refused; shuffling and moving objects
   still work. Simulated failures are off.
@@ -217,8 +228,9 @@ A physics-based simulator can replace `KinematicSimulator` by implementing
   the perception stack, as on the robot. Change it with `robot: camera:` in a scenario.
 - The arm extends to the base's right, reaching 0.25-0.77 m from the base origin; a grasp
   may shift the base up to 0.8 m along its heading to line up.
-- Driver mode rules: navigation needs `navigation` mode; head, grasp and handover need
-  `position` mode (`driver_mode_rules` in a scenario).
+- Driver mode rules: navigation needs `navigation` mode; grasp and handover need
+  `position` mode; head moves work in position, navigation and trajectory mode, as the
+  driver's trajectory server accepts them (`driver_mode_rules` in a scenario).
 - Every object is grasped from the front unless the scenario's `grasp_directions` says
   `top`; detections report it as `grasp_direction`, as the real detector does.
 - The grasp services answer like the real servers after their grasp check: success only

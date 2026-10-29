@@ -25,7 +25,7 @@ class CommandError(Exception):
 
 class SimController:
     # Commands that wait on something outside the simulation, so must not hold its lock.
-    UNLOCKED_COMMANDS = ("reset_memory", "connect", "disconnect")
+    UNLOCKED_COMMANDS = ("reset_memory", "connect", "disconnect", "bt_stop", "cancel", "release_runstop")
     # Commands that act as the robot. In robot mode the virtual robot only mirrors the real one.
     ROBOT_COMMANDS = ("goto", "detect", "grasp_best", "handover", "mode", "demo", "tour", "success_rate")
 
@@ -246,11 +246,48 @@ class SimController:
             raise CommandError(msg)
         return msg
 
+    def _cancel_sim(self) -> None:
+        '''Stops the virtual robot: scripts and every running operation.'''
+        with self.sim.lock:
+            self.runner.stop()
+            for op in list(self.sim.ops):
+                self.sim.cancel(op)
+
     def _cmd_cancel(self, cmd):
-        self.runner.stop()
-        for op in list(self.sim.ops):
-            self.sim.cancel(op)
-        return "canceled everything"
+        '''
+        Stops everything. With the real robot, that also stops the tree and runstops the
+        robot, since a grasp, handover or scan service part way has no other stop.
+        '''
+        if not self.robot_mode:
+            self._cancel_sim()
+            return "canceled everything"
+        ok, message = self._stop_real_robot(runstop=True)
+        if not ok:
+            raise CommandError(f"the robot may still be moving: {message}")
+        return "runstopped the robot and stopped the tree; release the runstop to move it again"
+
+    def _stop_real_robot(self, runstop: bool):
+        '''
+        Stops the robot at once, then the tree, then cancels any goal the tree sent while
+        it was shutting down. Returns (ok, message) for the robot stop.
+        '''
+        ok, message = self.ros_bridge.stop_robot(runstop=runstop)
+        bt, bridge = self.bt, self.ros_bridge
+        if bt is not None and bt.running:
+            def stop_tree():
+                bt.stop()
+                bridge.cancel_robot_goals()
+            threading.Thread(target=stop_tree, daemon=True).start()   # may take a few seconds
+        self._cancel_sim()
+        return ok, message
+
+    def _cmd_release_runstop(self, cmd):
+        if not self.robot_mode:
+            raise CommandError("not connected to the robot")
+        ok, message = self.ros_bridge.release_runstop()
+        if not ok:
+            raise CommandError(f"runstop not released: {message}")
+        return "released the runstop"
 
     def _graspable_objects(self) -> List[str]:
         return [n for n, o in self.sim.objects.items()
@@ -304,9 +341,25 @@ class SimController:
         return f"started '{tree}'"
 
     def _cmd_bt_stop(self, cmd):
+        '''
+        Stops the tree and what it set going: the virtual robot's operations, or with the
+        real robot, its goals and current motion (even with no tree running, e.g. after it
+        crashed). A grasp, handover or scan service part way on the robot carries on; Cancel
+        everything runstops it.
+        '''
+        if self.robot_mode:
+            ok, message = self._stop_real_robot(runstop=False)
+            if not ok:
+                raise CommandError(f"the robot may still be moving: {message}")
+            return f"stopped the robot ({message})"
         if self.bt is None or not self.bt.running:
             raise CommandError("no behaviour tree is running")
-        threading.Thread(target=self.bt.stop, daemon=True).start()   # may take a few seconds
+        bt = self.bt
+
+        def stop_tree():
+            bt.stop()
+            self._cancel_sim()      # what the tree started would otherwise run on
+        threading.Thread(target=stop_tree, daemon=True).start()   # may take a few seconds
         return "stopping"
 
     def _cmd_reset_memory(self, cmd):
@@ -347,7 +400,7 @@ class SimController:
         return "disconnected: the sim plays the robot again"
 
     def _cmd_respawn(self, cmd):
-        self._cmd_cancel(cmd)
+        self._cancel_sim()
         seed = cmd.get("seed")
         self.sim.reset(int(seed) if seed not in (None, "") else random.randrange(1_000_000))
         return f"respawned with seed {self.sim.seed}"

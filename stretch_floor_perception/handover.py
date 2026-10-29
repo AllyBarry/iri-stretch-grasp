@@ -10,9 +10,16 @@
 #   2. Learn what the gripper + object look like in the head camera point cloud.
 #   3. Wait for a hand to appear on the object (new 3D points around the
 #      gripper that persist for release_delay_s).
-#   4. Open the gripper. With stow_after_handover:=true, wait for the hand to
-#      clear and stow; otherwise leave the arm where it is.
+#   4. Open the gripper, then wait (up to clear_timeout_s) for the hand to clear
+#      and, with retract_after_handover:=true (the default), retract the arm,
+#      keeping the lift where it is; with stow_after_handover:=true, stow instead.
+#
+# Every motion is checked: one the driver rejects or aborts (e.g. while the
+# robot is runstopped) ends the handover as a failure, saying so, rather than
+# reporting an object handed over that is still in the gripper.
 
+from action_msgs.msg import GoalStatus
+from control_msgs.action import FollowJointTrajectory
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import CameraInfo, Image
 from sensor_msgs_py import point_cloud2
@@ -38,6 +45,10 @@ ARM_BEARING_RAD = -math.pi / 2.0
 
 
 class DebugMoveCancelled(RuntimeError):
+    pass
+
+
+class MotionFailed(RuntimeError):
     pass
 
 
@@ -81,9 +92,19 @@ class HandoverNode(hm.HelloNode):
             raise DebugMoveCancelled(f'User declined motion: {description}')
 
     def debug_move_to_pose(self, pose, description):
+        '''Moves and waits; raises MotionFailed when the driver does not carry the motion out.'''
         self.logger.info(description)
         self._confirm_motion(description)
-        return self.move_to_pose(pose)
+        if self.mode.data == 'runstopped':
+            raise MotionFailed(f'The robot is runstopped, so unable to: {description}')
+        result = self.move_to_pose(pose)
+        if result is None:      # dry run, or a pose the helper refused to send
+            return result
+        error_code = getattr(result.result, 'error_code', FollowJointTrajectory.Result.SUCCESSFUL)
+        if result.status != GoalStatus.STATUS_SUCCEEDED or error_code != FollowJointTrajectory.Result.SUCCESSFUL:
+            reason = getattr(result.result, 'error_string', '') or f'goal status {result.status}, error {error_code}'
+            raise MotionFailed(f'Unable to: {description} ({reason})')
+        return result
 
     def _point_head_at_gripper(self):
         if self.dryrun:
@@ -475,19 +496,34 @@ class HandoverNode(hm.HelloNode):
                                         'No hand detected, so retract the arm while keeping the object')
                 return False, f'No hand detected within {self.hand_timeout_s:.0f} s.'
 
-            self.debug_move_to_pose({'gripper_aperture': self.release_aperture_m},
-                                    'Open the gripper to release the object')
+            try:
+                self.debug_move_to_pose({'gripper_aperture': self.release_aperture_m},
+                                        'Open the gripper to release the object')
+            except MotionFailed as exc:
+                return False, f'{exc}; the object is still in the gripper.'
 
-            if self.stow_after_handover:
+            if self.stow_after_handover or self.retract_after_handover:
+                # Do not move the arm while the person's fingers are still in the gripper.
                 if not self.wait_for_hand_clear(baseline):
-                    self.logger.warn(f'Hand still near the gripper after {self.clear_timeout_s:.0f} s; stowing anyway.')
-                self.logger.info('Stow the robot.')
-                self._confirm_motion('Stow the robot')
-                self.stow_the_robot()
+                    self.logger.warn(f'Hand still near the gripper after {self.clear_timeout_s:.0f} s; '
+                                     'moving the arm away anyway.')
+                if self.stow_after_handover:
+                    self.logger.info('Stow the robot.')
+                    self._confirm_motion('Stow the robot')
+                    self.stow_the_robot()
+                    return True, 'Object handed over; stowed.'
+                try:
+                    self.debug_move_to_pose({'wrist_extension': 0.01}, 'Retract the arm')
+                except MotionFailed as exc:
+                    return True, f'Object handed over, but the arm stayed out: {exc}.'
+                return True, 'Object handed over; arm retracted.'
             return True, 'Object handed over.'
         except DebugMoveCancelled as exc:
             self.logger.warn(str(exc))
             return False, str(exc)
+        except MotionFailed as exc:
+            self.logger.error(str(exc))
+            return False, f'{exc}; the object is still in the gripper.'
         finally:
             self._restore_mode(original_mode)
             self.handover_lock.release()
@@ -552,9 +588,12 @@ class HandoverNode(hm.HelloNode):
         self._declare_parameter_once('run_once', True)
         self._declare_parameter_once('handover_service', '/handover')
         self._declare_parameter_once('stow_after_handover', False)
+        # After the release, wait for the hand to clear and retract the arm (ignored when stowing).
+        self._declare_parameter_once('retract_after_handover', True)
         self.dryrun = as_bool(self.get_parameter('dryrun').value)
         self.debug_mode = as_bool(self.get_parameter('debug_mode').value)
         self.stow_after_handover = as_bool(self.get_parameter('stow_after_handover').value)
+        self.retract_after_handover = as_bool(self.get_parameter('retract_after_handover').value)
 
         self._declare_parameter_once('find_human', False)
         self._declare_parameter_once('person_model', os.path.expanduser('~/stretch_user/models/yolov8n.pt'))
@@ -573,6 +612,7 @@ class HandoverNode(hm.HelloNode):
         self.rotate_image = as_bool(self.get_parameter('rotate_image').value)
 
         self.logger.info(f'Settings: find_human={self.find_human} stow_after_handover={self.stow_after_handover} '
+                         f'retract_after_handover={self.retract_after_handover} '
                          f'dryrun={self.dryrun} debug_mode={self.debug_mode}')
 
         if self.find_human:
@@ -590,7 +630,11 @@ class HandoverNode(hm.HelloNode):
             while not isinstance(self.tool, str):
                 time.sleep(0.1)
             success, message = self.handover()
-            (self.logger.info if success else self.logger.error)(message)
+            # Separate calls: rclpy refuses one call site logging at different severities.
+            if success:
+                self.logger.info(message)
+            else:
+                self.logger.error(message)
             # Stop the executor thread before exiting; otherwise the process
             # aborts with 'terminate called without an active exception'.
             rclpy.shutdown()

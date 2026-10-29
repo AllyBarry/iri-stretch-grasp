@@ -10,9 +10,16 @@ robot's map, so the virtual robot drives to the sim's location of the same name.
 
     Navigate node running      the virtual robot drives to that location
     scan/objects changes       objects the real robot saw are moved to where it saw them
-    Grasp node running         the virtual robot grasps the target object
-    Handover node running      the virtual robot hands over what it holds
-    holding_object changes     the gripper is corrected to match, whatever the animation did
+    Grasp node running         the virtual robot goes to the location and waits: the object
+                               is only shown in its gripper once the BT reports the real
+                               grasp confirmed (holding_object set), since an animation
+                               would finish, and report success, long before the real one
+    Handover node running      the virtual robot goes to the Human and waits: the hand over
+                               is only shown once the BT reports it done (holding_object
+                               cleared, the object believed with the Human), since the
+                               real one can fail, e.g. with no /handover service
+    holding_object differs     the gripper is corrected to match, whatever the animation
+                               did, as soon as no animation is running
 
 The BT navigates with the robot's own location poses, made from its places.yaml (written
 by stretch_places), e.g. Table -> table, Human -> handover.
@@ -35,6 +42,10 @@ DEFAULT_PLACES = "stretch:~/stretch_user/maps/embrace_apartment_map.places.yaml"
 DEFAULT_DOMAIN_ID = 42
 # BT location -> place in places.yaml, where the place is not the lower-case location name.
 DEFAULT_PLACE_NAMES = {"Human": "handover"}
+# Degrees added to a place's yaw for a BT location. The arm extends to the robot's right,
+# so to hand over it must park with its right side to the person; a place saved facing the
+# person (as "handover" was) is turned a quarter turn left, so the arm faces where it faced.
+DEFAULT_YAW_OFFSETS_DEG = {"Human": 90.0}
 # How far the virtual robot may be from a location's approach pose and still count as there.
 AT_LOCATION_M = 0.2
 
@@ -64,18 +75,23 @@ def read_places(source: str, timeout_s: float = 10.0) -> Dict[str, Dict[str, flo
 
 
 def location_poses_from_places(places: Dict[str, Dict[str, float]], locations: List[str],
-                               place_names: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, Dict[str, float]], List[str]]:
+                               place_names: Optional[Dict[str, str]] = None,
+                               yaw_offsets_deg: Optional[Dict[str, float]] = None) -> Tuple[Dict[str, Dict[str, float]], List[str]]:
     '''
     The BT's location_poses.json content for the real robot, and the locations that have
     no place. Each location uses place_names[location], else DEFAULT_PLACE_NAMES, else
-    its lower-case name.
+    its lower-case name, turned by yaw_offsets_deg[location], else DEFAULT_YAW_OFFSETS_DEG.
     '''
     names = DEFAULT_PLACE_NAMES | (place_names or {})
+    offsets = DEFAULT_YAW_OFFSETS_DEG | (yaw_offsets_deg or {})
     poses, missing = {}, []
     for location in locations:
         place = names.get(location, location.lower())
         if place in places:
-            poses[location] = dict(places[place])
+            pose = dict(places[place])
+            yaw = pose["yaw"] + math.radians(offsets.get(location, 0.0))
+            pose["yaw"] = round(math.atan2(math.sin(yaw), math.cos(yaw)), 4)
+            poses[location] = pose
         else:
             missing.append(f"{location} (no place '{place}')")
     return poses, missing
@@ -103,6 +119,9 @@ class RobotMirror:
             if values.get("holding_object") != self._holding:
                 previous, self._holding = self._holding, values.get("holding_object")
                 self._mirror_holding(previous, self._holding, values)
+            elif not self.sim.ops and self.sim.robot.held != self._holding:
+                # An animation ended differently from the real robot, e.g. a grasp it failed.
+                self._mirror_holding(self._holding, self._holding, values)
 
     '''
     NODES
@@ -120,9 +139,8 @@ class RobotMirror:
         elif "Handover" in tip:
             self._arrive("Human")
             if self.sim.robot.held:
-                self._emit(f"real robot handing over '{self.sim.robot.held}'")
-                self._ensure_mode("position")
-                self.sim.handover()
+                # Not animated: the release is shown when the BT reports the real one done.
+                self._emit(f"real robot handing over '{self.sim.robot.held}'; waiting for it to report the result")
 
     def _mirror_grasp(self, values: dict) -> None:
         name, here = values.get("target_object"), values.get("target_location")
@@ -132,12 +150,8 @@ class RobotMirror:
         self._arrive(here)
         if obj.location != here:
             self._move(name, here)      # the real robot found it here
-        det = values.get("target_detection") or {}
-        r = self.sim.robot.pose
-        lx, ly = world_to_local(r, obj.x, obj.y)
-        self._emit(f"real robot grasping '{name}' at the {here}")
-        self._ensure_mode("position")
-        self.sim.grasp((lx, ly, obj.z), direction=det.get("grasp_direction") or "front")
+        # Not animated: the object goes into the gripper when the BT reports the real grasp done.
+        self._emit(f"real robot grasping '{name}' at the {here}; waiting for it to report the result")
 
     '''
     STATE
