@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stretch Sim</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <span class="brand-name">Stretch Sim</span>
+      <span class="chip" id="world-chip" title="World"></span>
+      <span class="chip" id="scenario-chip" title="Scenario and seed"></span>
+      <span class="conn" id="conn" title="Connection to the simulator"></span>
+    </div>
+    <div class="transport">
+      <button class="icon-btn" id="btn-pause" title="Pause / resume (space)" aria-label="Pause"></button>
+      <div class="segmented" id="speed-seg" role="group" aria-label="Simulation speed"></div>
+      <span class="clock" id="clock" title="Simulation time">0.0 s</span>
+    </div>
+    <div class="top-actions">
+      <button class="badge danger hidden" id="violations-badge" title="Show violations in the log"></button>
+      <button class="btn ghost" id="btn-respawn" title="Respawn objects with a new seed (r)">Respawn</button>
+      <button class="icon-btn" id="btn-theme" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card map-panel">
+      <div class="map-toolbar">
+        <button class="btn ghost small" id="btn-fit" title="Fit the map (0)">Fit</button>
+        <label class="toggle"><input type="checkbox" id="opt-labels" checked> Labels</label>
+        <label class="toggle"><input type="checkbox" id="opt-approach" checked> Parking poses</label>
+        <label class="toggle"><input type="checkbox" id="opt-follow-robot"> Follow robot</label>
+        <span class="hint">Scroll to zoom · drag to pan · click a location to drive there · drag an object to move it</span>
+      </div>
+      <div class="map-wrap" id="map-wrap">
+        <svg id="map" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div class="tooltip hidden" id="tooltip"></div>
+        <div class="legend">
+          <span><i class="dot ingredient"></i>Ingredient</span>
+          <span><i class="dot tool"></i>Tool</span>
+          <span><i class="ring"></i>Just detected</span>
+          <span><i class="miss"></i>Missed in the last scan</span>
+          <span><i class="fov"></i>Last scanned surface</span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="card">
+        <div class="carrying">
+          <h2>Robot carrying</h2>
+          <span class="carry-value" id="robot-held">nothing</span>
+        </div>
+      </section>
+
+      <section class="card" id="beliefs-card">
+        <div class="card-head">
+          <h2>Robot beliefs</h2>
+          <label class="toggle small-toggle"><input type="checkbox" id="beliefs-required" checked> recipe items only</label>
+        </div>
+        <p class="sub" id="beliefs-empty">Run a behaviour tree to see where the robot believes each object is.</p>
+        <div class="hidden" id="beliefs-body">
+          <dl class="belief-summary" id="belief-summary"></dl>
+          <div class="belief-table-wrap"><table class="belief-table" id="belief-table"></table></div>
+          <div class="belief-legend">
+            <span><i class="swatch"></i>believed probability</span>
+            <span><i class="truth-mark"></i>where it really is</span>
+            <span>✓ human can reach it (robot's view)</span>
+          </div>
+          <div class="belief-actions">
+            <button class="btn small danger-outline" id="btn-reset-memory"
+                    title="Reset the robot's beliefs to the priors and restart its current pass. Keeps the recipe and what it is holding.">Reset robot memory</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Activity</h2><span class="sub" id="script-name"></span></div>
+        <div id="ops" class="ops"></div>
+      </section>
+
+      <section class="card" id="bt-card">
+        <div class="card-head"><h2>Behaviour tree</h2><span class="pill" id="bt-pill">idle</span></div>
+        <p class="notice hidden" id="bt-unavailable"></p>
+        <div class="bt-form">
+          <label class="field"><span>Tree</span><select id="bt-tree" aria-label="Behaviour tree"></select></label>
+          <label class="field"><span>Recipe</span><select id="bt-recipe" aria-label="Recipe"></select></label>
+          <div class="bt-actions">
+            <button class="btn primary" id="btn-bt-start">Run tree</button>
+            <button class="btn danger-outline" id="btn-bt-stop">Stop</button>
+          </div>
+        </div>
+        <div class="robot-link">
+          <label class="field"><span>Robot</span><input id="robot-places" type="text" spellcheck="false"
+            aria-label="The robot's places file: a local path, or HOST:PATH read over ssh"
+            title="The robot's places.yaml: a local path, or HOST:PATH read over ssh"></label>
+          <div class="robot-link-row">
+            <label class="field"><span>Domain</span><input id="robot-domain" type="number" min="0" max="232"
+              aria-label="The robot's ROS domain ID"></label>
+            <button class="btn" id="btn-robot-link">Connect to robot</button>
+          </div>
+        </div>
+        <div class="sub ros-status" id="ros-status"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Controls</h2><span class="sub">switch driver mode automatically</span></div>
+        <div class="ctl-label">Go to</div>
+        <div class="btn-row" id="goto-buttons"></div>
+        <div class="ctl-label">Actions</div>
+        <div class="btn-grid">
+          <button class="btn" data-cmd='{"cmd":"detect"}'>Detect <kbd>s</kbd></button>
+          <button class="btn" data-cmd='{"cmd":"grasp_best"}'>Grasp best <kbd>g</kbd></button>
+          <button class="btn" data-cmd='{"cmd":"handover"}'>Hand over <kbd>o</kbd></button>
+          <button class="btn" data-cmd='{"cmd":"mode"}'>Toggle mode <kbd>m</kbd></button>
+          <button class="btn danger-outline wide" data-cmd='{"cmd":"cancel"}'>Cancel everything <kbd>c</kbd></button>
+        </div>
+        <div class="ctl-label">Action success rate <span class="sub" id="success-value"></span></div>
+        <input type="range" id="success-rate" min="0" max="100" step="5" aria-label="Action success rate">
+        <div class="ctl-label">Scripts <span class="sub">(use ground truth)</span></div>
+        <div class="script-row">
+          <select id="demo-object" aria-label="Object to fetch"></select>
+          <button class="btn primary" id="btn-demo">Fetch <kbd>d</kbd></button>
+          <button class="btn" data-cmd='{"cmd":"tour"}'>Tour <kbd>t</kbd></button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Inventory</h2><span class="sub">ground truth · drag onto the map</span></div>
+        <div class="move-row">
+          <span>Move</span>
+          <select id="move-object" aria-label="Object to move"></select>
+          <span>to</span>
+          <select id="move-location" aria-label="Where to move it"></select>
+          <button class="btn small" id="btn-move">Move</button>
+        </div>
+        <div class="shuffle-row">
+          <span>Move</span>
+          <input type="number" id="shuffle-count" min="1" max="20" value="3" aria-label="Number of objects to move">
+          <span>random objects to other surfaces</span>
+          <button class="btn small" id="btn-shuffle" title="Shuffle object locations behind the robot's back (x)">Shuffle <kbd>x</kbd></button>
+        </div>
+        <div id="inventory" class="inventory"></div>
+      </section>
+    </aside>
+
+    <section class="card log-panel">
+      <div class="log-toolbar">
+        <h2>Event log</h2>
+        <div class="kind-filters" id="kind-filters"></div>
+        <input type="search" id="log-search" placeholder="Search events and data…" aria-label="Search the log">
+        <label class="toggle"><input type="checkbox" id="log-follow" checked> Follow</label>
+        <a class="btn ghost small" href="/api/events.jsonl" download="events.jsonl">Download</a>
+      </div>
+      <div class="log-body">
+        <div class="log-table-wrap" id="log-wrap">
+          <table class="log-table">
+            <thead><tr><th>Time</th><th>Kind</th><th>Op</th><th>Source</th><th>Message</th></tr></thead>
+            <tbody id="log-rows"></tbody>
+          </table>
+        </div>
+        <div class="log-detail" id="log-detail"><p class="empty">Select an event to see its data and the rest of its operation.</p></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

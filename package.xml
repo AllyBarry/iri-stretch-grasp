@@ -24,6 +24,15 @@
 <exec_depend>py_trees</exec_depend>
 <exec_depend>unaceba</exec_depend>
 <exec_depend>ament_index_python</exec_depend>
+<exec_depend>std_srvs</exec_depend>
+<exec_depend>action_msgs</exec_depend>
+<exec_depend>control_msgs</exec_depend>
+<exec_depend>trajectory_msgs</exec_depend>
+<exec_depend>nav2_msgs</exec_depend>
+
+<!-- Dependencies used by stretch_sim -->
+<exec_depend>python3-yaml</exec_depend>
+<exec_depend>python3-pil</exec_depend>
 
 <exec_depend>rosidl_default_runtime</exec_depend>
 
