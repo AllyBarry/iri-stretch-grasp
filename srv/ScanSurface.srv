@@ -1,0 +1,23 @@
+# Sweep the head camera over a surface (desk, table, floor) and detect the objects on it.
+# Leave target_label empty for a full sweep that returns every object seen. Set it to search:
+# the sweep stops once an object whose name (VLM or detector label) contains target_label,
+# ignoring case, has been confirmed by overlapping views.
+string target_label
+# Name of a surface in the node's surfaces_file (a polygon and height in the map frame). When set,
+# the head poses are planned to cover that surface edge to edge, and detections that are not on
+# it are dropped. Leave empty to use the fixed head poses and keep every detection.
+string surface_name
+# Head poses to visit (every pan at each tilt). Leave empty to use the planned poses for
+# surface_name, or else the node's scan_pans_rad / scan_tilts_rad parameters.
+float32[] pan_angles_rad
+float32[] tilt_angles_rad
+---
+# False only when the sweep could not run (unknown surface, no detector, no images, head motion failed).
+bool success
+string message
+# Search mode: whether target_label was found, and the best matching detection.
+bool found
+stretch_floor_perception/DetectedObject3D target
+# Every object seen, merged across views (one entry per object), in base_link.
+stretch_floor_perception/DetectedObject3DArray detections
+int32 views_scanned

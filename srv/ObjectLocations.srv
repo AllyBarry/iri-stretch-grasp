@@ -1,0 +1,9 @@
+# Where is an object likely to be? Answered from config/locations/location_priors.json.
+string object           # any spelling: "olive oil", "Olive Oil", "olive_oil", "tomatoes"
+---
+bool found
+string object           # the name as written in the priors file, e.g. "Olive Oil"
+string category         # "ingredient" or "tool"
+string[] locations      # most likely first; locations with probability 0 are left out
+float32[] probabilities # same order as locations
+string message
