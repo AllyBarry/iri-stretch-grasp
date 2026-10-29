@@ -94,7 +94,9 @@ class DecideTargetObjectNode(ActionNode):
         blocking = set(blocking_objects)
         next_obj = next((obj for obj in ordered_objects if obj in blocking), None)
 
-        state.set_value("target_object",next_obj)
+        state.set_value("optimal_object",next_obj)
+        if state.get_value("target_object") is None:
+            state.set_value("target_object",next_obj)
 
         return Status.SUCCESS
 
@@ -103,10 +105,10 @@ class DecideTargetObjectNode(ActionNode):
         known_objects = StretchState.get_objects()
         requireds = [f"required/{obj}" for obj in known_objects]
         reachables = [f"human_reachable/{obj}" for obj in known_objects]
-        return requireds + reachables + ["recipe/name"]
+        return requireds + reachables + ["recipe/name","target_object"]
 
     def output_variables(self):
-        return ["target_object"]
+        return ["target_object","optimal_object"]
 
     def semantic_description(self):
         return "Based on which objects are reachable by the human, which are required by the recipe, and the order of steps in the recipe, decides the next object to fetch"
@@ -170,12 +172,203 @@ class DecideTargetLocationNode(ActionNode):
     def semantic_description(self):
         return "Decides where to search for the target object, choosing the location where it is most likely to be"
 
+
+class TargetNotOptimalCondition(ConditionNode):
+    def __init__(self, name:str = "TargetNotOptimalCondition"):
+        super(TargetNotOptimalCondition, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.READ)
+
+    def execute(self, state: StretchState):
+        if state.get_value("target_object") == state.get_value("optimal_object"):
+            return Status.FAILURE
+        return Status.SUCCESS
+
+    def input_variables(self):
+        return ["target_object","optimal_object"]
+
+    def output_variables(self):
+        return []
+
+    def semantic_description(self):
+        return "Checks if the robot has found a better object to fetch than its current target object"
+
+class CanAbandonTaskCondition(ConditionNode):
+    def __init__(self, name:str = "CanAbandonTaskCondition"):
+        super(CanAbandonTaskCondition, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.READ)
+
+    def execute(self, state: StretchState):
+        if state.get_value("gripper_occupied"):
+            return Status.FAILURE
+        return Status.SUCCESS
+
+    def input_variables(self):
+        return ["gripper_occupied"]
+
+    def output_variables(self):
+        return []
+
+    def semantic_description(self):
+        return "Checks if the robot is able to abandon its current task to start another one"
+
+class ResetTargetObjectNode(ActionNode):
+    def __init__(self, name: str = "ResetTargetObjectNode"):
+        super(ResetTargetObjectNode, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.WRITE)
+
+
+    def execute(self, state: StretchState):
+        tobj = state.get_value("target_object")
+        oobj = state.get_value("optimal_object")
+
+        if oobj is None:
+            state.set_value("has_replanned", False)
+            if tobj is not None:
+                return Status.SUCCESS
+            return Status.FAILURE
+
+        state.set_value("target_object", oobj)
+        state.set_value("has_replanned", True)
+        return Status.SUCCESS
+
+    def input_variables(self):
+        return ["target_object","optimal_object"]
+
+    def output_variables(self):
+        return ["target_object","has_replanned"]
+
+    def semantic_description(self):
+        return "Sets the target object to match the optimal object as determined by the robot"
+
+class AlreadyAtLocationCondition(ConditionNode):
+    def __init__(self, name:str = "AlreadyAtLocationCondition"):
+        super(AlreadyAtLocationCondition, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.READ)
+
+    def execute(self, state: StretchState):
+        # TODO: This always fails at the moment, so the robot will always attempt to navigate
+        # TODO: Implement the necessary state variables so that the robot will know where it is
+        return Status.FAILURE
+
+    def input_variables(self):
+        return []
+
+    def output_variables(self):
+        return []
+
+    def semantic_description(self):
+        return "Checks if the robot is already at its target location"
+
+class HandleGraspFailureNode(ActionNode):
+    def __init__(self, name: str = "HandleGraspFailureNode"):
+        super(HandleGraspFailureNode, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.WRITE)
+
+
+    def execute(self, state: StretchState):
+        # TODO: How do we handle a grasping failure???
+        return Status.SUCCESS
+
+    def input_variables(self):
+        return []
+
+    def output_variables(self):
+        return []
+
+    def semantic_description(self):
+        return "Handles a robot grasping failure"
+
+class HasReplannedCheckAndSetNode(ActionNode):
+    def __init__(self, name: str = "HasReplannedCheckAndSetNode"):
+        super(HasReplannedCheckAndSetNode, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.WRITE)
+
+
+    def execute(self, state: StretchState):
+        if state.get_value("has_replanned"):
+            state.set_value("has_replanned",False)
+            return Status.SUCCESS
+        else:
+            return Status.FAILURE
+
+    def input_variables(self):
+        return ["has_replanned"]
+
+    def output_variables(self):
+        return ["has_replanned"]
+
+    def semantic_description(self):
+        return "Succeeds if the robot has replanned the target object recently, and then resets that variable. Fails otherwise"
+
+class UpdateRecipeStatusNode(ActionNode):
+    def __init__(self, name: str = "UpdateRecipeStatusNode"):
+        super(UpdateRecipeStatusNode, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.WRITE)
+
+
+    def execute(self, state: StretchState):
+        # TODO: How do we check if the recipe is done or not?
+        return Status.SUCCESS
+
+    def input_variables(self):
+        return []
+
+    def output_variables(self):
+        return ["recipe/status"]
+
+    def semantic_description(self):
+        return "Updates the status of the current recipe execution"
+
+class RecipeDoneCondition(ConditionNode):
+    def __init__(self, name:str = "RecipeDoneCondition"):
+        super(RecipeDoneCondition, self).__init__(name)
+
+        self.board.register_key("environment", access=py_trees.common.Access.READ)
+
+    def execute(self, state: StretchState):
+        if state.get_value("recipe/status") == StretchState.RECIPE_DONE_STATUS:
+            return Status.SUCCESS
+        return Status.FAILURE
+
+    def input_variables(self):
+        return ["recipe/status"]
+
+    def output_variables(self):
+        return []
+
+    def semantic_description(self):
+        return "Checks if the recipe has been finished or not"
+
 '''
 EXECUTING ROBOT SKILLS
 
 The runner spins the shared ROS node once per tick, so none of these nodes block:
 they start a service call or action goal, return RUNNING, and poll the result on later ticks.
 '''
+class DoNothingNode(ActionNode):
+    def __init__(self, name: str = "DoNothingNode"):
+        super(DoNothingNode, self).__init__(name)
+
+
+    def execute(self, state: StretchState):
+        return Status.SUCCESS
+
+    def input_variables(self):
+        return []
+
+    def output_variables(self):
+        return []
+
+    def semantic_description(self):
+        return "Does nothing"
+
 class _SkillLogging:
     def _info(self, msg: str) -> None:
         self._ros_node.get_logger().info(f"[{self.name}] {msg}")

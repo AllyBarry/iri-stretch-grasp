@@ -7,9 +7,9 @@ def replan_sequence():
         name="reset_if_conditions_sequence",
         memory=False,
         children=[
-            TargetNotOptimalCondition(), # TODO: Implement
-            CanAbandonTaskCondition(), # TODO: Implement
-            ResetTargetObjectNode() # TODO: Implement
+            TargetNotOptimalCondition(),
+            CanAbandonTaskCondition(),
+            ResetTargetObjectNode()
         ]
     )
     
@@ -18,7 +18,7 @@ def replan_sequence():
         memory=False,
         children=[
             reset_if_conditions_sequence,
-            DoNothingNode() # TODO: Implement
+            DoNothingNode()
         ]
     )
     
@@ -48,7 +48,7 @@ def main_task_loop():
         memory=True,
         children=[
             GraspObjectNode(),
-            HandleGraspFailureNode() # TODO: Implement
+            HandleGraspFailureNode()
         ]
     )
     
@@ -66,7 +66,7 @@ def main_task_loop():
         name="has_replanned_or_task_fallback",
         memory=True,
         children=[
-            HasReplannedCondition(), # TODO: Implement
+            HasReplannedCheckAndSetNode(),
             grasp_nav_handover_sequence
         ]
     )

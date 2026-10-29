@@ -63,6 +63,9 @@ def load_location_data():
 class StretchState(State):
     _RECIPES, _INGREDIENTS, _TOOLS = load_recipe_data()
     _LOCATION_PRIORS, _LOCATIONS = load_location_data()
+    _RECIPE_STATUSES = ["Unspecified","InProgress","Done"]
+
+    RECIPE_DONE_STATUS = "Done"
 
     def __init__(self, state_vars=None, var_ranges=None,
                  semantic_dict=None, values=None):
@@ -70,7 +73,9 @@ class StretchState(State):
         state_vars = [
             "recipe/type",
             "recipe/name",
+            "recipe/status"
             "target_object",
+            "optimal_object",
             "target_location",
             "scan/objects",
             "target_detection",
@@ -82,6 +87,7 @@ class StretchState(State):
             "pick/point_map",
             "pick/point_base",
             "pick/size",
+            "has_replanned"
         ]
 
         var_ranges = (var_ranges or {}) | {
@@ -97,7 +103,15 @@ class StretchState(State):
                 ],
                 allow_none=True
             ),
+            "recipe/status": CategoricalRange(
+                self._RECIPE_STATUSES,
+                allow_none=False
+            ),
             "target_object": CategoricalRange(
+                self.get_objects(),
+                allow_none=True
+            ),
+            "optimal_object": CategoricalRange(
                 self.get_objects(),
                 allow_none=True
             ),
@@ -124,12 +138,15 @@ class StretchState(State):
             "pick/point_map": AnyRange(list),
             "pick/point_base": AnyRange(list),
             "pick/size": AnyRange(list),
+            "has_replanned":BooleanRange()
         }
 
         semantic_dict = (semantic_dict or {}) | {
             "recipe/type": "The broad category of recipe, e.g. 'salad' or 'sandwich'",
             "recipe/name": "The specific recipe ID, e.g. 'caprese_salad' or 'ham_cheese_tomato_sandwich'",
+            "recipe/status": "The current status of the recipe execution",
             "target_object": "The object the robot has decided to fetch to bring to the human",
+            "optimal_object": "The best object (according to the robot) to bring to the human",
             "target_location": "The location the robot has decided to go to look for the target object",
             "scan/objects": "The objects the robot saw in its most recent scan of a surface",
             "target_detection": "Where the robot saw the target object in its most recent search, or None if it was not seen",
@@ -141,12 +158,15 @@ class StretchState(State):
             "pick/point_map": "Where the last grasp was aimed, [x, y, z] in the map frame, or None if unknown",
             "pick/point_base": "Where the last grasp was aimed, [x, y, z] in base_link when it was sent",
             "pick/size": "The size [x, y, z] of the detection the last grasp was aimed at",
+            "has_replanned":"Whether or not the robot has recently overriden its target object"
         }
 
         skill_defaults = {
             "scan/objects": [],
             "target_found": False,
             "gripper_occupied": False,
+            "has_replanned": False,
+            "recipe/status": "Unspecified"
         }
 
         # Confidence in locations
