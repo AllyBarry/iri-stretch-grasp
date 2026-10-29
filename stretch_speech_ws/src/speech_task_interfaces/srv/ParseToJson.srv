@@ -1,0 +1,4 @@
+# Text in, the interpreter's JSON out (same format as the /speech/task_json topic). Translates if needed.
+string text
+---
+string json

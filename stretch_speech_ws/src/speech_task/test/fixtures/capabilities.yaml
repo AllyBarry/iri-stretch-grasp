@@ -1,0 +1,128 @@
+# Fixed manifest for unit tests (independent of config/capabilities.yaml).
+# Robot capability manifest.
+# This file is the single source of truth for what the interpreter may output:
+#   - each utterance becomes ONE high-level task from `actions:` below (not a sequence of steps);
+#     the downstream planner/executor decides how to carry it out
+#   - the LLM is shown these tasks/limitations and constrained to these task names
+#   - the validator rejects anything that does not match (unknown task -> infeasible,
+#     missing argument -> clarify, unknown value of a strict list -> clarify, out-of-range number -> infeasible)
+# Edit it to match the tasks your planner actually supports.
+
+robot:
+  name: Stretch
+  description: >
+    Hello Robot Stretch RE2: a mobile manipulator with a differential-drive base,
+    a vertical lift (0.2-1.1 m) and a telescoping arm (reach ~0.5 m) with a wrist
+    and gripper, plus a pan/tilt head camera.
+  limitations:
+    - Cannot climb stairs or open doors.
+    - Cannot carry objects heavier than about 1.5 kg.
+    - Cannot reach higher than about 1.1 m or lower than the floor.
+    - Holds at most one object at a time.
+    - Cannot use a stove, oven or knife, clean liquids, or use tools (it helps with recipes by
+      handling ingredients, it does not cook).
+  wake_words: []          # e.g. ["stretch", "robot"]; empty = every utterance is addressed to the robot
+
+# Known symbols. Parameters with `ref:` take values from these lists. With `strict: false` the list is
+# only a hint (used for speech recognition and spelling) and other values are accepted too.
+vocabulary:
+  locations: [kitchen, living_room, bedroom, bathroom, hallway, dining_table, couch, desk, charging_station]
+  objects: [cup, bottle, remote, phone, book, keys, apple, bowl, medicine, glasses, towel]
+  recipes: [hummus, vinaigrette, tomato salad, salsa]   # known recipes (placeholder list; edit)
+
+# Speech recogniser priming. Whisper strongly prefers words it has just "heard" in its prompt,
+# so list the verbs/phrases people actually use. Example sentences are generated from these
+# verbs + the vocabulary above.
+asr:
+  # Example commands, written the way people say them. {object}/{location} cycle through the
+  # vocabulary lists above (singular of the list name). Include every verb you expect to hear.
+  phrases:
+    - "Fetch the {object}."
+    - "Bring me the {object} from the {location}."
+    - "Get the {object}."
+    - "Pick up the {object}."
+    - "Grab the {object}."
+    - "Find the {object}."
+    - "Look for the {object}."
+    - "Go to the {location}."
+    - "Put it on the {location}."
+    - "Place the {object} on the {location}."
+    - "Pass me the {object}."
+    - "Pass the {object} to her."
+    - "Hand me the {object}."
+    - "Let's make {recipe}."
+    - "Set the recipe to {recipe}."
+    - "Move forward half a meter."
+    - "Turn left."
+    - "Stow your arm."
+  uncertain_word_prob: 0.5  # words Whisper is less sure of than this are flagged to the interpreter
+
+stop_phrases: [stop, halt, freeze, emergency stop, stop moving, stop now, abort]
+
+actions:
+  find:
+    description: Locate an object (search for it and report where it is; does not pick it up).
+    params:
+      object: {type: string, ref: objects, strict: false, required: true, ask: "What should I look for?"}
+      location: {type: string, ref: locations, required: false}
+  fetch:
+    description: Bring an object to the person who asked (or to `to`). Covers "bring/get/fetch me X".
+    params:
+      object: {type: string, ref: objects, strict: false, required: true, ask: "What should I bring?"}
+      from: {type: string, ref: locations, required: false}
+      to: {type: string, ref: locations, required: false}
+  pick_up:
+    description: Grasp an object and keep holding it.
+    params:
+      object: {type: string, ref: objects, strict: false, required: true, ask: "What should I pick up?"}
+      location: {type: string, ref: locations, required: false}
+  put:
+    description: "Put an object (default: the one being held) at a location."
+    params:
+      object: {type: string, ref: objects, strict: false, required: false}
+      location: {type: string, ref: locations, required: true, ask: "Where should I put it?"}
+  give:
+    description: Hand the object currently held to the person.
+    params: {}
+  pass:
+    description: >-
+      Pass an object that is already within the robot's reach (e.g. on the table in front of it) to a
+      person, without driving off to search for it. Covers "pass me X", "hand me X", "pass X to Anna".
+      If the object first has to be found or brought from elsewhere, use fetch instead.
+    params:
+      object: {type: string, ref: objects, strict: false, required: true, ask: "What should I pass?"}
+      to: {type: string, required: false}   # recipient's name; omitted = the person who asked
+  go_to:
+    description: Drive to a known location.
+    params:
+      location: {type: string, ref: locations, required: true, ask: "Where should I go?"}
+  move:
+    description: Small relative base motion.
+    params:
+      direction: {type: string, enum: [forward, backward, turn_left, turn_right], required: true, ask: "Which direction should I move?"}
+      distance: {type: number, min: 0.0, max: 2.0, required: false, unit: "m (or rad for turns)"}
+  look_at:
+    description: Point the head camera at a location or object.
+    params:
+      target: {type: string, required: true, ask: "What should I look at?"}
+  stow:
+    description: Retract the arm and lift into the safe travel pose.
+    params: {}
+  say:
+    description: Just answer in speech (questions about the robot, greetings that expect a reply).
+    params:
+      text: {type: string, required: true}
+  set_recipe:
+    description: >-
+      Set the recipe the user is making, so the robot knows which ingredients and steps to help with
+      ("let's make hummus", "we're cooking something but I haven't decided what"). Give `recipe` only
+      if a specific recipe was named. If the user wants to cook but the exact recipe is unknown, still use
+      set_recipe: leave out `recipe` and put any partial information (cuisine, main ingredient, meal) in `hint`.
+      An ingredient or cuisine on its own is a hint, not a recipe name ("something with chickpeas" ->
+      hint=something with chickpeas, no recipe).
+    params:
+      recipe: {type: string, ref: recipes, strict: false, required: false}
+      hint: {type: string, required: false}   # partial description when the exact recipe is unknown
+  stop:
+    description: Immediately stop all motion and cancel the current task.
+    params: {}

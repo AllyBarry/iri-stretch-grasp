@@ -1,0 +1,99 @@
+# Robot capability manifest: the tasks the speech interpreter can output, and their parameters.
+# Each request becomes ONE task from `actions:` below, written out as JSON with exactly the params listed:
+#   {"task": "fetch",      "params": {"object": "garlic"}}
+#   {"task": "where",      "params": {"object": "salt"}}
+#   {"task": "set_recipe", "params": {"recipe_name": "greek_salad", "recipe_type": "salad"}}
+#   {"task": "chat",       "params": {"text": "how are you today?"}}
+#   {"task": "stop",       "params": {}}
+# A param the person did not say (or that cannot be one thing) is null. Anything that is none of these tasks
+# gives no JSON. Param options beyond type/ref/enum/required: grounded: false (the value need not be said
+# literally), unknown: drop_all (a value not in the list empties the params instead of asking), fill: input
+# (always the person's own words).
+# After editing: restart the interpreter (no rebuild needed).
+
+robot:
+  name: Stretch
+  description: >
+    Hello Robot Stretch RE2: a mobile manipulator that helps a person in the kitchen by bringing them things
+    (ingredients, food, drinks, utensils) and telling them where things are. The person does the cutting,
+    mixing and cooking.
+  limitations:
+    - Holds at most one object at a time (it still takes requests for several things: see the tasks).
+  wake_words: []          # e.g. ["stretch", "robot"]; empty = every utterance is addressed to the robot
+
+# Known names. `objects` are the detector's classes; `recipes` is replaced at startup by the recipe ids
+# in iri-stretch-grasp/config/recipes/*.json (this list is only the fallback if that folder is not found).
+vocabulary:
+  objects: [chickpeas, cucumber, garlic, lemon, mustard, olive oil, onion, salt, tomato]
+  recipes: [caprese_salad, chickpea_salad, greek_salad, cheese_mustard_sandwich, ham_cheese_tomato_sandwich]
+
+# Speech recogniser priming: sentences the way people say them ({object}/{recipe} cycle through the lists above).
+asr:
+  phrases:
+    - "Bring me the {object}."
+    - "Fetch the {object}."
+    - "Can you get me the {object}?"
+    - "Where is the {object}?"
+    - "Where did I put the {object}?"
+    - "Let's make {recipe}."
+    - "I want to make a salad."
+    - "Let's make a sandwich."
+    - "Stop."
+  uncertain_word_prob: 0.5  # words Whisper is less sure of than this are flagged to the interpreter
+
+# Said on their own, these stop the robot at once without going through the LLM (English, Spanish, Catalan)
+stop_phrases: [stop, halt, freeze, emergency stop, stop moving, stop now, abort,
+               para, alto, detente, quieto, quieta, para ya, atura, atura't, aturat]
+
+actions:
+  fetch:
+    description: >-
+      The person wants an object brought to them. Covers "bring/get/fetch/grab/pass/hand me the X", "can I
+      have the X", "I need the X, can you get it", "find me the X". Also when they first ask where it is or
+      whether the robot can see it and then ask for it ("is the jam around? bring it over") -- that is one
+      fetch, not two tasks. object is the one thing they want, in their words: any object, food, dish or
+      drink, not only the listed ones (bringing or finding something never needs a recipe). Also when they ask where it is and then say they need it ("where's the jam? I need it
+      now"). Leave object out when they want two or more things ("the fork and the knife"), a choice ("the
+      jam or the honey") or no particular thing ("something sweet"). Never refuse a fetch: the robot itself checks
+      whether the thing is there.
+    params:
+      object: {type: string, ref: objects, strict: false, required: false, single: true}
+  where:
+    description: >-
+      The person wants to know where an object is, or whether the robot can see it. Covers "where is the X",
+      "have you seen the X", "can you spot the X", "is there an X around", "help me locate the X". object is
+      the one thing they ask about, in their words: any object, food, dish or drink, not only the listed ones. Leave object out
+      when they ask about two or more things ("the fork and the knife", "the jam or the honey") or about no
+      particular thing ("something to sit on").
+    params:
+      object: {type: string, ref: objects, strict: false, required: false, single: true}
+  set_recipe:
+    description: >-
+      The person wants to start making or eating something now, or is choosing what to make now ("let's
+      make X", "I'd like X for dinner", "I'm starving", "what shall we prepare?", "time to eat"). recipe_name: only when exactly one
+      listed recipe is meant, by its name or by what is in it (a sandwich with cheese and mustard =
+      cheese_mustard_sandwich); if they change their mind, use the last choice. recipe_type: give it when
+      they want a salad or a sandwich but not one single recipe ("some sandwich", "any salad you like",
+      "the chickpea or the Greek salad"). Leave BOTH out when: no type is chosen ("I'm starving", "a salad or
+      a sandwich"), the options are of different types, they only name an ingredient ("something with
+      lemon"), or they name a dish we have no recipe for ("a Waldorf salad", "a club sandwich", "a greek
+      sandwich", "lasagne"). A dish name that only shares a word with a listed recipe is not that recipe (a
+      "cobb salad" is not the chickpea salad). Not set_recipe, but chat: questions about food, asking for
+      ideas or suggestions, and remarks about tastes or habits ("I often eat soup", "I like spicy food",
+      "we've got plenty of food").
+    params:
+      recipe_name: {type: string, ref: recipes, required: false, grounded: false, unknown: drop_all}
+      recipe_type: {type: string, enum: [salad, sandwich], required: false}
+  chat:
+    description: >-
+      Anything else said to the robot: greetings, thanks, compliments, small talk, opinions and likes, what
+      they usually eat or are trying to eat, questions about food, cooking or robots ("is feta a cheese?",
+      "how do I keep herbs fresh?"), asking for ideas or suggestions ("any ideas for dinner?"), and requests
+      to explain, repeat, suggest or tell something ("tell me a riddle"). Use chat, never ignore, clarify or
+      infeasible, for anything said to the robot that is not one of the other tasks.
+      text is filled in automatically with what the person said.
+    params:
+      text: {type: string, required: true, fill: input}
+  stop:
+    description: Stop moving and cancel the current task.
+    params: {}

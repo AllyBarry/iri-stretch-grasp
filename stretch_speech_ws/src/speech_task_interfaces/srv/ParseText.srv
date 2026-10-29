@@ -1,0 +1,5 @@
+# Interpret text directly (bypasses audio). Useful for testing and for other nodes.
+string text
+bool use_dialogue_context  # true: treat as answer to a pending clarification question
+---
+TaskCommand command
