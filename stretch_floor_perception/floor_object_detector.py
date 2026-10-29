@@ -47,17 +47,28 @@ class UltralyticsYolo:
 
     def infer(self, image, threshold=None):  # node's threshold (0.85, for FastSAM) is ignored
         bgr = np.ascontiguousarray(image[..., ::-1])  # node passes RGB, ultralytics expects BGR
-        pred = self.model(bgr, conf=self.conf, verbose=False)[0]
-        det2d = Detection2D(source_img=image, boxes_xyxy=[], masks=None)
+        # retina_masks: masks at full image resolution. They are used as rasters, not polygons: an
+        # object split in two by something in front (basket) would otherwise be filled across the gap.
+        pred = self.model(bgr, conf=self.conf, verbose=False, retina_masks=True)[0]
+        masks = None
+        if getattr(pred, "masks", None) is not None and pred.masks.data is not None:
+            masks = pred.masks.data.cpu().numpy() > 0.5
+        det2d = Detection2D(source_img=image, boxes_xyxy=[], masks=[] if masks is not None else None)
         if pred.boxes is None or len(pred.boxes) == 0:
             return det2d
         xyxy = pred.boxes.xyxy.cpu().numpy().astype(np.float32)
         confs = pred.boxes.conf.cpu().numpy()
         classes = pred.boxes.cls.cpu().numpy().astype(int)
-        for box, c, k in zip(xyxy, confs, classes):
+        for j, (box, c, k) in enumerate(zip(xyxy, confs, classes)):
             label = str(pred.names[int(k)])
             self.logger.info(f"YOLO: {label} {float(c):.2f}")
-            det2d.add_detection(id=label, score=float(c), box=box, mask=None)
+            m = None
+            if masks is not None and j < len(masks):
+                m = masks[j]
+                if m.shape != image.shape[:2]:
+                    m = cv2.resize(m.astype(np.uint8), (image.shape[1], image.shape[0]),
+                                   interpolation=cv2.INTER_NEAREST).astype(bool)
+            det2d.add_detection(id=label, score=float(c), box=box, mask=m)
         return det2d
 
 try:
@@ -169,7 +180,8 @@ class FloorObjectDetector(Node):
         self.declare_parameter("hybrid_min_iou", 0.3)   # min YOLO/FastSAM box overlap to take FastSAM's box
         # class:grasp pairs; listed classes get pick_up=yes and that grasp when no VLM is used
         self.declare_parameter("class_grasp", "garlic:top,lemon:top,onion:top,tomato:top,"
-                                              "salt:front,mustard:front,balsamic:front")
+                                              "salt:front,mustard:front,balsamic:front,"
+                                              "olive oil:front,chick peas:front")
         # Picking the object's own points out of the 2D box (the box also covers surface and background)
         self.declare_parameter("box_inner_fraction", 0.6)   # central part of the box used for the object depth
         self.declare_parameter("depth_band_m", 0.08)        # keep box points within this of that depth
@@ -316,6 +328,7 @@ class FloorObjectDetector(Node):
             metadata.append(
                 {
                     "detector_class_name": detector_class_name,
+                    "idx": idx,
                     "vlm": None if vlm_annotations is None or idx >= len(vlm_annotations) else vlm_annotations[idx],
                 }
             )
@@ -420,23 +433,31 @@ class FloorObjectDetector(Node):
 
 
     def _estimate_object_3d(self, points_base: np.ndarray, camera_base: np.ndarray,
-                            near_side_correction: float = 1.0):
-        """Centre and size of the object from the depth points in its box (base frame, z up).
+                            near_side_correction: float = 1.0, surface_z: Optional[float] = None):
+        """Centre and size of the object from its depth points (base frame, z up).
+
+        surface_z: height of the surface it stands on, when known (mask path). Then all points are
+        the object's. Without it (box path) the points also contain surface, which is removed here.
 
         Returns (centroid, size, num_object_points, near_side_push_m, yaw). The box is aligned
         with the object's long axis seen from above: yaw is that axis's angle about z in the base
         frame, and size is (long, short, height). Medians and percentiles are used so stray edge
         and background points don't move the result.
         """
-        # Whatever surface is left in the box is its lowest part, so drop points close to a low
-        # percentile of the heights. Keep all points if too few would be left (no surface visible).
-        surface_z = float(np.percentile(points_base[:, 2], 10.0))
-        above = points_base[:, 2] > surface_z + self._surface_clearance_m
-        on_surface = int(np.count_nonzero(above)) >= self._min_object_points
-        obj = points_base[above] if on_surface else points_base
+        if surface_z is not None:
+            obj = points_base
+            top_z = float(np.percentile(obj[:, 2], 95.0))
+            bottom_z = surface_z
+        else:
+            # Whatever surface is left in the box is its lowest part, so drop points close to a low
+            # percentile of the heights. Keep all points if too few would be left (no surface visible).
+            surface_z = float(np.percentile(points_base[:, 2], 10.0))
+            above = points_base[:, 2] > surface_z + self._surface_clearance_m
+            on_surface = int(np.count_nonzero(above)) >= self._min_object_points
+            obj = points_base[above] if on_surface else points_base
 
-        top_z = float(np.percentile(obj[:, 2], 95.0))
-        bottom_z = surface_z if on_surface else float(np.percentile(obj[:, 2], 5.0))
+            top_z = float(np.percentile(obj[:, 2], 95.0))
+            bottom_z = surface_z if on_surface else float(np.percentile(obj[:, 2], 5.0))
 
         # The camera only sees the near side of the object, so the median of its points is short
         # of the centre. Push it away from the camera by the object's radius (its width across the
@@ -471,6 +492,76 @@ class FloorObjectDetector(Node):
         size = np.array([max(major_len, minor_len), minor_len, max(top_z - bottom_z, 0.0)])
         centroid = np.array([xy[0], xy[1], 0.5 * (top_z + bottom_z)])
         return centroid, size, obj.shape[0], push_m, yaw
+
+    def _pixels_to_points(self, xs, ys, pad_left, pad_top, depth_im, intrinsics, max_points=20000):
+        """Camera-frame 3D points for pixels of the rotated, padded detector image."""
+        fx, fy, cx, cy = intrinsics
+        h, w = depth_im.shape[:2]
+        x, y = xs - pad_left, ys - pad_top
+        u, v = y, (h - 1) - x                     # undo the 90 degree clockwise rotation
+        ok = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+        u, v = u[ok], v[ok]
+        z = depth_im[v, u].astype(np.float32)
+        good = np.isfinite(z) & (z > 0)
+        u, v, z = u[good].astype(np.float32), v[good].astype(np.float32), z[good]
+        pts = np.stack(((u - cx) * z / fx, (v - cy) * z / fy, z), axis=1)
+        if pts.shape[0] > max_points:
+            pts = pts[:: int(np.ceil(pts.shape[0] / max_points))]
+        return pts
+
+    def _mask_points(self, det_idx, metadata, detections, pad_left, pad_top, depth_im, info_msg,
+                     max_points=20000):
+        """3D points (camera frame) from the depth pixels under a segmentation mask, so the table and
+        background inside the box are never used, plus the points of a thin ring just outside the
+        mask, which show the surface the object stands on. (None, None) when there is no usable mask."""
+        masks = getattr(detections, "masks", None)
+        if not masks or det_idx >= len(metadata):
+            return None, None
+        midx = metadata[det_idx].get("idx")
+        if midx is None or midx >= len(masks) or masks[midx] is None:
+            return None, None
+        intr = self._get_intrinsics(info_msg)
+        if intr is None:
+            return None, None
+        full = masks[midx].astype(np.uint8)
+        mask = cv2.erode(full, np.ones((5, 5), np.uint8))  # stay off the edges
+        ys, xs = np.nonzero(mask)
+        if len(xs) < 20:
+            return None, None
+        pts = self._pixels_to_points(xs, ys, pad_left, pad_top, depth_im, intr, max_points)
+        if pts.shape[0] < 20:
+            return None, None
+        # Depth along a mask edge can belong to whatever is behind, so keep the object's depth range.
+        z_med = float(np.median(pts[:, 2]))
+        pts = pts[np.abs(pts[:, 2] - z_med) <= self._depth_band_m]
+        # Ring 3-8 px outside the mask (the gap skips the edge pixels).
+        ring = (cv2.dilate(full, np.ones((17, 17), np.uint8)) > 0) & ~(cv2.dilate(full, np.ones((7, 7), np.uint8)) > 0)
+        rys, rxs = np.nonzero(ring)
+        ring_pts = self._pixels_to_points(rxs, rys, pad_left, pad_top, depth_im, intr, max_points)
+        self.get_logger().info(f"mask: {pts.shape[0]} depth points, ring: {ring_pts.shape[0]}")
+        return pts, ring_pts
+
+    def _surface_below(self, obj_base: np.ndarray, ring_base: Optional[np.ndarray],
+                       max_gap_m: float = 0.10, near_m: float = 0.10) -> float:
+        """Height of the surface the object stands on, from the ring of points around its mask.
+
+        Only ring points within near_m of the object (horizontally) count, so the floor or a wall
+        seen behind the object is ignored. Neighbours in a basket are higher than what the object
+        rests on, so a low percentile is used. Falls back to the object's own lowest points when the
+        ring shows nothing usable (e.g. the bottom is hidden).
+        """
+        obj_low = float(np.percentile(obj_base[:, 2], 5.0))
+        if ring_base is None or ring_base.shape[0] < self._min_object_points:
+            return obj_low
+        centre = np.median(obj_base[:, :2], axis=0)
+        reach = near_m + 0.5 * float(np.max(np.ptp(obj_base[:, :2], axis=0)))
+        near = ring_base[np.linalg.norm(ring_base[:, :2] - centre, axis=1) <= reach]
+        if near.shape[0] < self._min_object_points:
+            return obj_low
+        surface_z = float(np.percentile(near[:, 2], 20.0))
+        if surface_z > obj_low or obj_low - surface_z > max_gap_m:
+            return obj_low
+        return surface_z
 
     def _identity_quaternion(self) -> Quaternion:
         return Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
@@ -865,12 +956,21 @@ class FloorObjectDetector(Node):
                                                          depth_m, 
                                                          info_msg,
                                                          max_points = 20000)
+            mask_pts, ring_pts = self._mask_points(det_idx, det2d_metadata, detections, pad_left, pad_top,
+                                                   depth_m, info_msg)
+            if mask_pts is not None:
+                pts3d_window_cam = mask_pts
             if pts3d_window_cam is None:
                 continue
 
             points_base = pts3d_window_cam @ rot.T[:3, :3] + trans[:3]
+            surface_z = None
+            if mask_pts is not None:
+                ring_base = ring_pts @ rot.T[:3, :3] + trans[:3] if ring_pts is not None and len(ring_pts) else None
+                surface_z = self._surface_below(points_base, ring_base)
             centroid, size, num_points, push_m, yaw = self._estimate_object_3d(
-                points_base, trans[:3], float(self.get_parameter("near_side_correction").value)
+                points_base, trans[:3], float(self.get_parameter("near_side_correction").value),
+                surface_z=surface_z,
             )
             if num_points < self._min_object_points:
                 self.get_logger().info(

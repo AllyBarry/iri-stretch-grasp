@@ -6,20 +6,17 @@ import time
 import numpy as np
 import rclpy
 import rclpy.logging
-import ros2_numpy as rn
 from geometry_msgs.msg import Point, Quaternion
 from rclpy.callback_groups import ReentrantCallbackGroup
-from scipy import ndimage
-from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from visualization_msgs.msg import Marker
 
 import hello_helpers.hello_misc as hm
-from stretch_floor_perception.grasp_carry import DebugMoveCancelled, GraspNode
-from stretch_floor_perception.srv import Grasp
+from stretch_floor_perception.grasp_carry import DebugMoveCancelled, GraspPointNode
+from stretch_floor_perception.srv import GraspPoint
 
 
-class TopdownGraspNode(GraspNode):
+class TopdownGraspNode(GraspPointNode):
     """Grasp an object from above off a table, desk or the floor, then carry it.
 
     The support surface height is measured from the point cloud around the target,
@@ -38,219 +35,20 @@ class TopdownGraspNode(GraspNode):
 
     def __init__(self):
         super().__init__()
-        self.object_cluster_radius_m = 0.12
-        self.object_vertical_window_m = 0.30
-        self.min_object_height_above_surface_m = 0.01
-        self.max_object_height_m = 0.30
-        self.min_object_points = 60
-        self.min_elongation_ratio = 1.6
-        self.top_band_fraction = 0.35
-        self.min_top_band_m = 0.01
-        self.bbox_margin_m = 0.03
-        self.cluster_cell_m = 0.01
-        self.min_cluster_points = 15
         self.max_center_shift_fraction = 0.5
         self.min_max_center_shift_m = 0.03
         self.roll_axis_offset_rad = 0.0
         self.topdown_wrist_pitch_rad = (-math.pi / 2.0) + 0.07
         self.topdown_wrist_yaw_rad = 0.0
-        self.hover_above_object_m = 0.20
         self.min_pitch_clearance_m = 0.05
         self.align_tolerance_m = 0.005
-        self.grasp_depth_below_top_m = 0.04
-        self.surface_clearance_m = 0.015
         self.open_aperture_m = 0.075
         self.object_lift_height_m = 0.10
         self.retract_after_lift = True
-        self.head_settle_s = 1.0
 
     # ------------------------------------------------------------------
-    # Perception helpers
+    # Perception helpers (measuring the object is shared, in grasp_carry)
     # ------------------------------------------------------------------
-
-    def _wait_for_fresh_point_cloud(self, timeout_s=3.0):
-        start_ns = self.get_clock().now().nanoseconds
-        deadline_s = time.time() + timeout_s
-        while time.time() < deadline_s:
-            point_cloud_msg = self.point_cloud
-            if Time.from_msg(point_cloud_msg.header.stamp).nanoseconds > start_ns:
-                return point_cloud_msg
-            time.sleep(0.05)
-        return None
-
-    def _bbox_in_base(self, bbox, frame_id):
-        """The detector's box in base_link, or None when the request has no box.
-
-        Returns center, the unit long axis in the xy plane, and size (long, short, height).
-        """
-        size = np.array([bbox.size.x, bbox.size.y, bbox.size.z], dtype=float)
-        if not np.all(np.isfinite(size)) or size[0] <= 0.0 or size[1] <= 0.0:
-            return None
-        p = bbox.center.position
-        center_frame = np.array([p.x, p.y, p.z], dtype=float)
-        center = self._transform_point(center_frame, frame_id, 'base_link')
-        if center is None:
-            return None
-
-        # The x axis of the box orientation, carried into base_link. An unset (all zero)
-        # quaternion gives the frame's x axis.
-        q = bbox.center.orientation
-        axis_frame = np.array([
-            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
-            2.0 * (q.x * q.y + q.w * q.z),
-            2.0 * (q.x * q.z - q.w * q.y),
-        ])
-        axis_end = self._transform_point(center_frame + axis_frame, frame_id, 'base_link')
-        axis_xy = (axis_end - center)[:2] if axis_end is not None else np.array([1.0, 0.0])
-        norm = float(np.linalg.norm(axis_xy))
-        axis_xy = axis_xy / norm if norm > 1e-6 else np.array([1.0, 0.0])
-
-        # Keep x as the long side, whatever order the sizes come in.
-        if size[1] > size[0]:
-            size[0], size[1] = size[1], size[0]
-            axis_xy = np.array([-axis_xy[1], axis_xy[0]])
-        return {'center': center, 'major_axis_xy': axis_xy, 'size': size}
-
-    def _collect_local_points_in_base_frame(self, point_cloud_msg, target_base, radius_m=None):
-        if radius_m is None:
-            radius_m = self.object_cluster_radius_m
-        cloud_to_base_mat, _ = hm.get_p1_to_p2_matrix(
-            point_cloud_msg.header.frame_id, 'base_link', self.tf2_buffer,
-            lookup_time=Time.from_msg(point_cloud_msg.header.stamp), timeout_s=0.5)
-        if cloud_to_base_mat is None:
-            cloud_to_base_mat, _ = hm.get_p1_to_p2_matrix(
-                point_cloud_msg.header.frame_id, 'base_link', self.tf2_buffer)
-        if cloud_to_base_mat is None:
-            return None
-
-        xyz = rn.point_cloud2.get_xyz_points(rn.numpify(point_cloud_msg))
-        if xyz.size == 0:
-            return np.zeros((0, 3))
-        xyz = np.matmul(xyz, cloud_to_base_mat[:3, :3].T) + cloud_to_base_mat[:3, 3]
-
-        delta = xyz - target_base
-        in_radius = (delta[:, 0] ** 2 + delta[:, 1] ** 2) <= (radius_m ** 2)
-        in_window = np.abs(delta[:, 2]) <= self.object_vertical_window_m
-        return xyz[in_radius & in_window]
-
-    def _select_object_cluster(self, points, target_xy):
-        """Points of the blob nearest the target, seen from above.
-
-        Points are binned into a grid of cluster_cell_m cells, grown by one cell to
-        bridge small depth holes, and split into connected blobs. Neighbouring objects
-        end up in other blobs and are dropped.
-        """
-        cells = np.floor(points[:, :2] / self.cluster_cell_m).astype(np.int64)
-        cells -= cells.min(axis=0)
-        occupied = np.zeros(tuple(cells.max(axis=0) + 1), dtype=bool)
-        occupied[cells[:, 0], cells[:, 1]] = True
-        grown = ndimage.binary_dilation(occupied, structure=np.ones((3, 3), dtype=bool))
-        labels, num_labels = ndimage.label(grown, structure=np.ones((3, 3), dtype=bool))
-        point_labels = labels[cells[:, 0], cells[:, 1]]
-
-        best_label, best_dist = None, math.inf
-        for label in range(1, num_labels + 1):
-            member_xy = points[point_labels == label, :2]
-            if len(member_xy) < self.min_cluster_points:
-                continue
-            dist = float(np.min(np.linalg.norm(member_xy - target_xy, axis=1)))
-            if dist < best_dist:
-                best_label, best_dist = label, dist
-        if best_label is None:
-            return None
-        if num_labels > 1:
-            self.logger.info(
-                f'Kept the object blob nearest the target out of {num_labels} '
-                f'({int(np.count_nonzero(point_labels == best_label))} of {len(points)} points).'
-            )
-        return points[point_labels == best_label]
-
-    def _make_object(self, center_xy, surface_z, top_z, major_axis_xy, major_length_m, minor_length_m,
-                     fallback_width_m, elongation_ratio=None):
-        major_axis_xy = np.asarray(major_axis_xy, dtype=float)
-        if elongation_ratio is None:
-            elongation_ratio = major_length_m / max(minor_length_m, 1e-3)
-        return {
-            'center_xy': np.asarray(center_xy, dtype=float),
-            'surface_z': surface_z,
-            'top_z': top_z,
-            'grasp_tip_z': max(top_z - self.grasp_depth_below_top_m, surface_z + self.surface_clearance_m),
-            'hover_tip_z': top_z + self.hover_above_object_m,
-            'major_axis_xy': major_axis_xy,
-            'major_length_m': max(major_length_m, fallback_width_m),
-            'minor_length_m': max(minor_length_m, fallback_width_m),
-            'elongated': bool(elongation_ratio >= self.min_elongation_ratio),
-            'elongation_ratio': elongation_ratio,
-        }
-
-    def _fit_footprint(self, xy):
-        """Long axis, centre and (long, short) extent of points seen from above.
-
-        The centre is the middle of the extent, not the mean of the points: the camera
-        sees more of the near side, which pulls the mean towards the robot.
-        """
-        mean_xy = xy.mean(axis=0)
-        centered_xy = xy - mean_xy
-        eigenvalues, eigenvectors = np.linalg.eigh(np.cov(centered_xy, rowvar=False))
-        major_axis = eigenvectors[:, int(np.argmax(eigenvalues))]
-        major_axis /= max(np.linalg.norm(major_axis), 1e-6)
-        minor_axis = np.array([-major_axis[1], major_axis[0]], dtype=float)
-        lo_major, hi_major = np.percentile(centered_xy @ major_axis, [5.0, 95.0])
-        lo_minor, hi_minor = np.percentile(centered_xy @ minor_axis, [5.0, 95.0])
-        center_xy = (mean_xy + major_axis * 0.5 * (lo_major + hi_major)
-                     + minor_axis * 0.5 * (lo_minor + hi_minor))
-        return major_axis, center_xy, float(hi_major - lo_major), float(hi_minor - lo_minor)
-
-    def _estimate_object(self, target_base, local_points_base, fallback_width_m, box=None):
-        """Measure the object from the point cloud. Returns (object or None, surface_z or None)."""
-        if local_points_base is None or len(local_points_base) < self.min_object_points:
-            return None, None
-
-        points = np.asarray(local_points_base, dtype=float)
-        # The crop around the object is mostly the supporting surface, so a low
-        # percentile of the heights is the table, desk or floor top.
-        surface_z = float(np.percentile(points[:, 2], 10.0))
-        object_mask = (
-            (points[:, 2] > (surface_z + self.min_object_height_above_surface_m))
-            & (points[:, 2] < (surface_z + self.max_object_height_m))
-        )
-        if box is not None:
-            # Keep to the detector's box, with a margin for the side it could not see.
-            delta_xy = points[:, :2] - box['center'][:2]
-            major = box['major_axis_xy']
-            minor = np.array([-major[1], major[0]])
-            object_mask &= np.abs(delta_xy @ major) <= (0.5 * box['size'][0] + self.bbox_margin_m)
-            object_mask &= np.abs(delta_xy @ minor) <= (0.5 * box['size'][1] + self.bbox_margin_m)
-        object_points = points[object_mask]
-        if len(object_points) < max(20, self.min_object_points // 3):
-            self.logger.warn('Unable to isolate enough points above the surface for top-down grasping.')
-            return None, surface_z
-
-        target_xy = np.asarray(target_base[:2], dtype=float)
-        object_points = self._select_object_cluster(object_points, target_xy)
-        if object_points is None or len(object_points) < 3:
-            self.logger.warn('No blob of points near the target for top-down grasping.')
-            return None, surface_z
-
-        top_z = float(np.percentile(object_points[:, 2], 95.0))
-        # Fit the axis, centre and elongation to the top surface only. The side faces seen
-        # at an angle and noisy edge pixels smear the footprint, so a round object can look
-        # elongated in some arbitrary direction.
-        band_m = max(self.top_band_fraction * (top_z - surface_z), self.min_top_band_m)
-        top_points = object_points[object_points[:, 2] >= (top_z - band_m)]
-        if len(top_points) < self.min_cluster_points:
-            top_points = object_points
-        major_axis, center_xy, top_major_m, top_minor_m = self._fit_footprint(top_points[:, :2])
-        minor_axis = np.array([-major_axis[1], major_axis[0]], dtype=float)
-
-        # Size from the whole object along those axes, so the box covers all of it.
-        delta_xy = object_points[:, :2] - center_xy
-        major_length_m = float(np.subtract(*np.percentile(delta_xy @ major_axis, [95.0, 5.0])))
-        minor_length_m = float(np.subtract(*np.percentile(delta_xy @ minor_axis, [95.0, 5.0])))
-        obj = self._make_object(center_xy, surface_z, top_z, major_axis, major_length_m, minor_length_m,
-                                fallback_width_m, elongation_ratio=top_major_m / max(top_minor_m, 1e-3))
-        obj['source'] = 'point cloud'
-        return obj, surface_z
 
     def _object_from_box(self, box, surface_z, fallback_width_m):
         """The object as the detector's box describes it, on the measured surface if known."""
@@ -303,37 +101,10 @@ class TopdownGraspNode(GraspNode):
     def _planned_closing_axis(self, roll):
         """Direction, in base_link xy, the fingers are meant to close along at this wrist roll.
 
-        _compute_topdown_roll turns the fingers to close across the long axis, with
-        roll_axis_offset_rad calibrating that, so this undoes it.
+        The inverse of _compute_topdown_roll: the fingers close along -roll, less the offset.
         """
-        angle = float(roll) - float(self.roll_axis_offset_rad) + (math.pi / 2.0)
+        angle = -(float(roll) - float(self.roll_axis_offset_rad))
         return np.array([math.cos(angle), math.sin(angle)])
-
-    def _publish_lines(self, ns, points_base, rgb, width_m, with_ends=False):
-        """Line segments (pairs of base_link points) in odom, optionally with spheres at the ends."""
-        if self.debug_marker_pub is None:
-            return
-        points_odom = [self._transform_point(p, 'base_link', 'odom') for p in points_base]
-        if any(p is None for p in points_odom):
-            return
-        points_msg = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2])) for p in points_odom]
-        kinds = [(0, Marker.LINE_LIST, width_m)]
-        if with_ends:
-            kinds.append((1, Marker.SPHERE_LIST, 2.0 * width_m))
-        for marker_id, marker_type, scale in kinds:
-            marker = Marker()
-            marker.header.frame_id = 'odom'
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = ns
-            marker.id = marker_id
-            marker.type = marker_type
-            marker.action = Marker.ADD
-            marker.pose.orientation.w = 1.0
-            marker.points = points_msg
-            marker.scale.x = marker.scale.y = marker.scale.z = float(scale)
-            marker.color.r, marker.color.g, marker.color.b = rgb
-            marker.color.a = 1.0
-            self.debug_marker_pub.publish(marker)
 
     def _publish_planned_grip(self, obj, grasp_axis, roll):
         """Show the object's long axis (blue) and where the fingers will close (green, with
@@ -347,14 +118,21 @@ class TopdownGraspNode(GraspNode):
         self._publish_lines('topdown_grip_planned', [center - half, center + half], (0.1, 0.9, 0.1), 0.008,
                             with_ends=True)
 
-    def _publish_actual_grip(self, roll):
+    def _publish_actual_grip(self, roll, center_base=None):
         """Show where the fingertips really are (magenta) and log how far their closing line is
-        from the planned one, which is the correction for roll_axis_offset_rad."""
+        from the planned one, which is the correction for roll_axis_offset_rad, and how far
+        their midpoint is from the planned centre."""
         left = self._get_frame_in_base('link_gripper_fingertip_left')
         right = self._get_frame_in_base('link_gripper_fingertip_right')
         if left is None or right is None:
             return
         self._publish_lines('topdown_grip_actual', [left, right], (1.0, 0.1, 0.9), 0.006, with_ends=True)
+        if center_base is not None:
+            offset = 0.5 * (left + right)[:2] - np.asarray(center_base, dtype=float)[:2]
+            self.logger.info(
+                f'Fingertip midpoint is {100 * float(np.linalg.norm(offset)):.1f} cm from the planned centre '
+                f'(base x {100 * offset[0]:+.1f} cm, y {100 * offset[1]:+.1f} cm).'
+            )
         across = (right - left)[:2]
         if float(np.linalg.norm(across)) < 0.01:
             self.logger.info('Fingertips too close together to measure the closing direction.')
@@ -366,29 +144,28 @@ class TopdownGraspNode(GraspNode):
         error_deg = (actual_deg - planned_deg + 90.0) % 180.0 - 90.0
         self.logger.info(
             f'Fingers close along {actual_deg % 180.0:.0f} deg, planned {planned_deg % 180.0:.0f} deg '
-            f'(base_link), off by {error_deg:+.0f} deg. If this stays off, subtract '
-            f'{math.radians(error_deg):+.3f} rad from roll_axis_offset_rad.'
+            f'(base_link), off by {error_deg:+.0f} deg. If this stays off, add '
+            f'{math.radians(error_deg):+.3f} rad to roll_axis_offset_rad.'
         )
 
     def _clear_topdown_markers(self):
         """Remove the planned object and grip markers. Kept apart from _clear_translation_marker,
         which the debug prompt calls before every move."""
-        if self.debug_marker_pub is None:
-            return
-        for ns, marker_id in (('topdown_object', 0), ('topdown_long_axis', 0),
+        self._delete_markers((('topdown_object', 0), ('topdown_long_axis', 0),
                               ('topdown_grip_planned', 0), ('topdown_grip_planned', 1),
-                              ('topdown_grip_actual', 0), ('topdown_grip_actual', 1)):
-            marker = Marker()
-            marker.header.frame_id = 'odom'
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = ns
-            marker.id = marker_id
-            marker.action = Marker.DELETE
-            self.debug_marker_pub.publish(marker)
+                              ('topdown_grip_actual', 0), ('topdown_grip_actual', 1), ('table_edge', 0)))
 
     def _compute_topdown_roll(self, major_axis_xy):
+        """Wrist roll that makes the fingers close across the object's long axis.
+
+        With the gripper pointing down, the fingers close along base x at roll 0, and a
+        positive roll turns that line clockwise seen from above, so they close along
+        -roll (checked against the URDF and on the robot). Closing across the long axis
+        therefore needs roll = -(long axis angle + 90 deg). roll_axis_offset_rad fine-tunes it.
+        """
         axis_xy = np.asarray(major_axis_xy, dtype=float)
-        roll = math.atan2(float(axis_xy[1]), float(axis_xy[0])) + float(self.roll_axis_offset_rad)
+        closing = math.atan2(float(axis_xy[1]), float(axis_xy[0])) + (math.pi / 2.0)
+        roll = -closing + float(self.roll_axis_offset_rad)
         roll = math.atan2(math.sin(roll), math.cos(roll))
 
         # Top-down finger alignment is symmetric under pi rotation, so choose
@@ -398,12 +175,6 @@ class TopdownGraspNode(GraspNode):
         elif roll < (-math.pi / 2.0):
             roll += math.pi
         return roll
-
-    def _get_frame_in_base(self, frame_id):
-        frame_to_base_mat, _ = hm.get_p1_to_p2_matrix(frame_id, 'base_link', self.tf2_buffer)
-        if frame_to_base_mat is None:
-            return None
-        return frame_to_base_mat[:3, 3].copy()
 
     def _get_gripper_tip_in_base(self):
         return self._get_frame_in_base('link_grasp_center')
@@ -429,7 +200,7 @@ class TopdownGraspNode(GraspNode):
         response.message = message
         return response
 
-    def topdown_grasp_point_service_callback(self, request, response):
+    def topdown_grasp_service_callback(self, request, response):
         try:
             # Drop the box planned for the previous object.
             self._clear_translation_marker()
@@ -458,26 +229,42 @@ class TopdownGraspNode(GraspNode):
             min_extension_m = 0.01
             max_extension_m = 0.5
 
-            target_base = self._transform_point(
-                [msg.point.x, msg.point.y, msg.point.z], msg.header.frame_id, 'base_link')
-            if target_base is None:
-                return self._fail(response, 'Unable to transform the target point into base_link.')
-            # Remember where the object was, in odom, to check afterwards that it is gone.
+            # Remember where the object was, in odom, to check afterwards that it is gone. The
+            # base turns and drives below, so the target and box are followed in odom too.
             pick_odom = self._transform_point(
                 [msg.point.x, msg.point.y, msg.point.z], msg.header.frame_id, 'odom')
+            if pick_odom is None:
+                return self._fail(response, 'Unable to transform the target point into odom.')
+            box_odom = None
+            box_request = self._bbox_in_base(request.bbox, msg.header.frame_id)
+            if box_request is not None:
+                box_odom = self._box_to_frame(box_request, 'base_link', 'odom')
 
-            # 1. Retract the arm at its current height, then look at the target.
+            # 1. Retract the arm at its current height.
             self.logger.info('Retract the arm before planning.')
             self.debug_move_to_pose({'wrist_extension': min_extension_m})
 
+            # 2. Square the base to the table edge found in the surface scan, so the arm reaches
+            #    straight out over the table and the base later drives along the edge.
+            if self.square_to_table_edge:
+                manip = self.look_at_surface(scan_time_s=self.scan_time_s)
+                edge = self._detect_table_edge(manip, pick_odom) if manip is not None else None
+                square_turn_rad = self._square_turn(edge) if edge is not None else 0.0
+                if abs(square_turn_rad) > 1e-3:
+                    self.logger.info(f'Turn the base {math.degrees(square_turn_rad):+.0f} deg to square up to the table edge.')
+                    self.debug_move_to_pose({'rotate_mobile_base': square_turn_rad})
+
+            # 3. Look at the target and measure the object.
+            target_base = self._transform_point(pick_odom, 'odom', 'base_link')
+            if target_base is None:
+                return self._fail(response, 'Unable to transform the target point into base_link.')
             self._point_head_at(target_base, 'the target')
             time.sleep(self.head_settle_s)
             point_cloud_msg = self._wait_for_fresh_point_cloud()
             if point_cloud_msg is None:
                 return self._fail(response, 'No fresh point cloud available, so unable to plan the top-down grasp.')
 
-            box = self._bbox_in_base(request.bbox, msg.header.frame_id)
-            crop_radius_m = self.object_cluster_radius_m
+            box = self._box_to_frame(box_odom, 'odom', 'base_link') if box_odom is not None else None
             if box is None:
                 self.logger.warn('No detector box in the request, so measuring the object from the target alone.')
             else:
@@ -486,9 +273,7 @@ class TopdownGraspNode(GraspNode):
                     f'size=({box["size"][0]:.3f}, {box["size"][1]:.3f}, {box["size"][2]:.3f}) m '
                     f'axis={math.degrees(math.atan2(box["major_axis_xy"][1], box["major_axis_xy"][0])):.0f} deg'
                 )
-                # Wide enough to see the surface around the whole box.
-                crop_radius_m = max(crop_radius_m, 0.5 * math.hypot(box['size'][0], box['size'][1])
-                                    + self.bbox_margin_m + 0.05)
+            crop_radius_m = self._crop_radius(box)
 
             local_points_base = self._collect_local_points_in_base_frame(
                 point_cloud_msg, target_base, crop_radius_m)
@@ -540,6 +325,29 @@ class TopdownGraspNode(GraspNode):
             def object_in_base():
                 return self._transform_point(object_odom, 'odom', 'base_link')
 
+            # 4. Drive the base in line with the object while the arm is still retracted at its
+            #    current height. Squared up, the base drives along the table edge. The arm's line
+            #    is the wrist yaw axis, which the gripper will point straight out from.
+            target_base = object_in_base()
+            yaw_axis_base = self._get_frame_in_base('link_wrist_yaw')
+            if target_base is None or yaw_axis_base is None:
+                return self._fail(response, 'Unable to locate the object or the wrist.')
+            self.logger.info('Drive in line with the object.')
+            self.debug_drive(float(target_base[0] - yaw_axis_base[0]))
+
+            # 5. Look again: odometry drifts while turning and driving, so measure the object
+            #    from where the base now is. The arm is still low, so it does not block the view.
+            if self.reobserve_after_base_move:
+                again = self._reobserve_object(object_odom, box_odom, assumed_width_m)
+                if again is not None:
+                    corrected_odom = self._transform_point(
+                        np.array([again['center_xy'][0], again['center_xy'][1], obj['top_z']]), 'base_link', 'odom')
+                    if corrected_odom is not None:
+                        object_odom = corrected_odom
+                        obj['center_xy'] = again['center_xy']
+                        self._publish_object_marker(obj)
+                        self._publish_planned_grip(obj, grasp_axis, topdown_roll)
+
             # Distance from the wrist pitch axis to the gripper tip. Tilting the
             # gripper down drops the tip by about this much below the pitch axis.
             tip_base = self._get_gripper_tip_in_base()
@@ -549,7 +357,7 @@ class TopdownGraspNode(GraspNode):
             tip_drop_m = float(np.linalg.norm(tip_base - pitch_base)) * math.cos(
                 float(self.topdown_wrist_pitch_rad) + (math.pi / 2.0))
 
-            # 2. Raise the retracted arm so that, once tilted down over the object,
+            # 6. Raise the retracted arm so that, once tilted down over the object,
             #    the gripper tip will hover hover_above_object_m above its top. The
             #    arm only moves along the mast, so it cannot sweep through the table.
             hover_pitch_z = obj['hover_tip_z'] + tip_drop_m
@@ -587,7 +395,7 @@ class TopdownGraspNode(GraspNode):
                 self.logger.info('Extend wrist slightly to clear the base before turning the gripper.')
                 self.debug_move_to_pose({'wrist_extension': 0.12})
 
-            # 3. Point the gripper level and straight out along the arm, ready to extend.
+            # 7. Point the gripper level and straight out along the arm, ready to extend.
             self.logger.info('Level the gripper, pointing out along the arm.')
             self.debug_move_to_pose({
                 'joint_wrist_pitch': 0.0,
@@ -595,17 +403,7 @@ class TopdownGraspNode(GraspNode):
                 'joint_wrist_roll': 0.0,
             })
 
-            # 4. Drive the base in line with the object, then extend from above so
-            #    the wrist pitch axis is over the object. The arm does not extend
-            #    until the base is in place.
-            target_base = object_in_base()
-            tip_base = self._get_gripper_tip_in_base()
-            if target_base is None or tip_base is None:
-                return self._fail(response, 'Unable to locate the object or the gripper tip.')
-            base_delta_m = float(target_base[0] - tip_base[0])
-            self.logger.info('Drive in line with the object.')
-            self.debug_drive(base_delta_m)
-
+            # 8. Extend from above so the wrist pitch axis is over the object.
             target_base = object_in_base()
             pitch_base = self._get_frame_in_base('link_wrist_pitch')
             if target_base is None or pitch_base is None or self.wrist_position is None:
@@ -620,7 +418,7 @@ class TopdownGraspNode(GraspNode):
             self.logger.info('Extend over the object from above.')
             self.debug_move_to_pose({'wrist_extension': extension_m})
 
-            # 5. Over the object: tilt the gripper down and align the fingers.
+            # 9. Over the object: tilt the gripper down and align the fingers.
             self.logger.info('Tilt the gripper down over the object.')
             self.debug_move_to_pose({
                 'joint_wrist_pitch': float(self.topdown_wrist_pitch_rad),
@@ -653,9 +451,9 @@ class TopdownGraspNode(GraspNode):
             self.logger.info('Open the gripper.')
             self.debug_move_to_pose({'gripper_aperture': float(self.open_aperture_m)})
             # Fingers are open and over the object: show and check their real closing line.
-            self._publish_actual_grip(topdown_roll)
+            self._publish_actual_grip(topdown_roll, object_in_base())
 
-            # 6. Continue straight down to surround the object, close and lift straight up.
+            # 10. Continue straight down to surround the object, close and lift straight up.
             grasp_lift_m = self._lift_for_tip_height(obj['grasp_tip_z'])
             if grasp_lift_m is None:
                 return self._fail(response, 'Unable to compute the grasp height.')
@@ -675,8 +473,11 @@ class TopdownGraspNode(GraspNode):
                 self.logger.info('Retract the arm to carry the object.')
                 self.debug_move_to_pose({'wrist_extension': min_extension_m})
 
-            # 7. Present the gripper to the camera and confirm the object is held.
-            self._present_gripper_to_camera()
+            # 11. Present the gripper to the camera and confirm the object is held.
+            # The grasp verifier moves to its own check pose; otherwise show the gripper here.
+            use_verifier = self.verify_grasp_visually and (not self.dryrun) and self._verifier_ready()
+            if not use_verifier:
+                self._present_gripper_to_camera()
             self._clear_translation_marker()
             self._clear_topdown_markers()
 
@@ -688,7 +489,8 @@ class TopdownGraspNode(GraspNode):
                 )
                 return response
 
-            response.success, response.message = self._verify_grasp(request.expected_label, pick_odom)
+            response.success, response.message = self._verify_grasp(
+                request.expected_label, pick_odom, use_verifier)
             if response.success:
                 self.logger.info(response.message)
             else:
@@ -703,7 +505,7 @@ class TopdownGraspNode(GraspNode):
             return response
 
     def main(self):
-        hm.HelloNode.main(self, 'topdown_grasp_point', 'topdown_grasp_point', wait_for_first_pointcloud=False)
+        hm.HelloNode.main(self, 'topdown_grasp', 'topdown_grasp', wait_for_first_pointcloud=False)
         self.logger = self.get_logger()
 
         self.callback_group = ReentrantCallbackGroup()
@@ -711,12 +513,14 @@ class TopdownGraspNode(GraspNode):
         defaults = {
             'debug_directory': '',
             'assumed_width_m': 0.05,
-            'grasp_service': '/topdown_grasp_point',
+            'grasp_service': '/topdown_grasp',
             'dryrun': False,
             'debug_mode': False,
             # Carry pose and visual confirmation (shared with grasp_carry).
-            'carry_wrist_pitch_rad': -0.3,
-            'carry_wrist_yaw_offset_rad': 0.5,
+            'carry_wrist_pitch_rad': -0.02,
+            'carry_wrist_yaw_rad': 0.70,
+            # After a top-down grasp the wrist roll can be anywhere, so take the nearer way up.
+            'carry_wrist_roll_nearest': True,
             'look_at_gripper': True,
             'verify_grasp_visually': True,
             # Top-down planning.
@@ -736,6 +540,11 @@ class TopdownGraspNode(GraspNode):
             'max_center_shift_fraction': 0.5,
             'min_max_center_shift_m': 0.03,
             'roll_axis_offset_rad': 0.0,
+            # Squaring up to the table edge, and looking again after the base moves.
+            'square_to_table_edge': True,
+            'max_square_turn_rad': 0.52,
+            'reobserve_after_base_move': True,
+            'max_reobserve_shift_m': 0.05,
             'topdown_wrist_pitch_rad': (-math.pi / 2.0) + 0.07,
             'topdown_wrist_yaw_rad': 0.0,
             'hover_above_object_m': 0.20,
@@ -758,14 +567,16 @@ class TopdownGraspNode(GraspNode):
         self.look_at_gripper = bool(self.get_parameter('look_at_gripper').value)
         self.verify_grasp_visually = bool(self.get_parameter('verify_grasp_visually').value)
         self.retract_after_lift = bool(self.get_parameter('retract_after_lift').value)
+        self.square_to_table_edge = bool(self.get_parameter('square_to_table_edge').value)
+        self.reobserve_after_base_move = bool(self.get_parameter('reobserve_after_base_move').value)
         self.min_object_points = int(self.get_parameter('min_object_points').value)
         self.min_cluster_points = int(self.get_parameter('min_cluster_points').value)
         for name in (
-            'assumed_width_m', 'carry_wrist_pitch_rad', 'carry_wrist_yaw_offset_rad',
+            'assumed_width_m', 'carry_wrist_pitch_rad', 'carry_wrist_yaw_rad',
             'object_cluster_radius_m', 'object_vertical_window_m', 'min_object_height_above_surface_m',
             'max_object_height_m', 'min_elongation_ratio', 'roll_axis_offset_rad',
             'bbox_margin_m', 'cluster_cell_m', 'max_center_shift_fraction', 'min_max_center_shift_m',
-            'top_band_fraction', 'min_top_band_m',
+            'top_band_fraction', 'min_top_band_m', 'max_square_turn_rad', 'max_reobserve_shift_m',
             'topdown_wrist_pitch_rad', 'topdown_wrist_yaw_rad', 'hover_above_object_m',
             'min_pitch_clearance_m', 'align_tolerance_m', 'grasp_depth_below_top_m', 'surface_clearance_m',
             'open_aperture_m', 'object_lift_height_m', 'head_settle_s',
@@ -780,11 +591,11 @@ class TopdownGraspNode(GraspNode):
             qos_profile=1, callback_group=self.callback_group)
 
         self.grasp_point_service = self.create_service(
-            Grasp, grasp_service, self.topdown_grasp_point_service_callback,
+            GraspPoint, grasp_service, self.topdown_grasp_service_callback,
             callback_group=self.callback_group)
 
         self.debug_marker_pub = self.create_publisher(
-            Marker, '/topdown_grasp_point/debug_translation_marker', 1)
+            Marker, '/topdown_grasp/debug_translation_marker', 1)
 
         self.logger.info(f'Top-down grasp point node is ready. Service: {grasp_service}')
 
@@ -795,7 +606,7 @@ def main():
         node.main()
         node.new_thread.join()
     except KeyboardInterrupt:
-        rclpy.logging.get_logger('topdown_grasp_point').info('interrupt received, so shutting down')
+        rclpy.logging.get_logger('topdown_grasp').info('interrupt received, so shutting down')
 
 
 if __name__ == '__main__':

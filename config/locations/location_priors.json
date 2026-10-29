@@ -1,0 +1,141 @@
+{
+    "Ingredients": {
+        "Basil": {
+            "Fridge": 0.9,
+            "Table": 0.1,
+            "Pantry": 0.0
+        },
+        "Bread": {
+            "Fridge": 0.4,
+            "Table": 0.5,
+            "Pantry": 0.1
+        },
+        "Butter": {
+            "Fridge": 0.95,
+            "Table": 0.05,
+            "Pantry": 0.0
+        },
+        "Chickpeas": {
+            "Fridge": 0.05,
+            "Table": 0.2,
+            "Pantry": 0.75
+        },
+        "Cucumber": {
+            "Fridge": 0.7,
+            "Table": 0.3,
+            "Pantry": 0.0
+        },
+        "Dill": {
+            "Fridge": 0.9,
+            "Table": 0.1,
+            "Pantry": 0.0
+        },
+        "Feta": {
+            "Fridge": 0.95,
+            "Table": 0.05,
+            "Pantry": 0.0
+        },
+        "Garlic": {
+            "Fridge": 0.4,
+            "Table": 0.5,
+            "Pantry": 0.1
+        },
+        "Ham": {
+            "Fridge": 0.3,
+            "Table": 0.1,
+            "Pantry": 0.6
+        },
+        "Lemon": {
+            "Fridge": 0.7,
+            "Table": 0.25,
+            "Pantry": 0.05
+        },
+        "Mint": {
+            "Fridge": 0.9,
+            "Table": 0.1,
+            "Pantry": 0.0
+        },
+        "Mozzarella": {
+            "Fridge": 0.9,
+            "Table": 0.1,
+            "Pantry": 0.0
+        },
+        "Mustard": {
+            "Fridge": 0.0,
+            "Table": 0.2,
+            "Pantry": 0.8
+        },
+        "Olive Oil": {
+            "Fridge": 0.0,
+            "Table": 0.1,
+            "Pantry": 0.9
+        },
+        "Olives": {
+            "Fridge": 0.4,
+            "Table": 0.1,
+            "Pantry": 0.5
+        },
+        "Onion": {
+            "Fridge": 0.0,
+            "Table": 0.7,
+            "Pantry": 0.3
+        },
+        "Oregano": {
+            "Fridge": 0.0,
+            "Table": 0.15,
+            "Pantry": 0.85
+        },
+        "Parsley": {
+            "Fridge": 0.9,
+            "Table": 0.1,
+            "Pantry": 0.0
+        },
+        "Pepper": {
+            "Fridge": 0.9,
+            "Table": 0.1,
+            "Pantry": 0.0
+        },
+        "Salt": {
+            "Fridge": 0.0,
+            "Table": 0.2,
+            "Pantry": 0.8
+        },
+        "Tomato": {
+            "Fridge": 0.4,
+            "Table": 0.6,
+            "Pantry": 0.0
+        }
+    },
+    "Tools": {
+        "Bowl": {
+            "Fridge": 0.0,
+            "Table": 1.0,
+            "Pantry": 0.0
+        },
+        "Cup": {
+            "Fridge": 0.0,
+            "Table": 1.0,
+            "Pantry": 0.0
+        },
+        "Cutting Board": {
+            "Fridge": 0.0,
+            "Table": 1.0,
+            "Pantry": 0.0
+        },
+        "Knife": {
+            "Fridge": 0.0,
+            "Table": 1.0,
+            "Pantry": 0.0
+        },
+        "Plate": {
+            "Fridge": 0.0,
+            "Table": 1.0,
+            "Pantry": 0.0
+        },
+        "Spoon": {
+            "Fridge": 0.0,
+            "Table": 1.0,
+            "Pantry": 0.0
+        }
+    }
+}

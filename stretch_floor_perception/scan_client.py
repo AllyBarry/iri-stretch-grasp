@@ -8,6 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.executors import MultiThreadedExecutor
 
 from sensor_msgs.msg import CameraInfo, CompressedImage
+from std_srvs.srv import Trigger
 
 from stretch_floor_perception.srv import DetectFloorObjects3D
 from stretch_floor_perception.srv import GraspPoint
@@ -23,6 +24,8 @@ class ManualScanClient(Node):
         self.declare_parameter("service_name", "detect_floor_objects_3d")
         self.declare_parameter("grasp_service_name", "/grasp_carry")
         self.declare_parameter("topdown_grasp_service_name", "/topdown_grasp")
+        # Called after a successful grasp to tuck the gripper for carrying; '' skips it.
+        self.declare_parameter("carry_pose_service_name", "/carry_pose")
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -57,7 +60,8 @@ class ManualScanClient(Node):
 
         topdown_grasp_service_name = self.get_parameter("topdown_grasp_service_name").value
         self._topdown_grasp_client = self.create_client(GraspPoint, topdown_grasp_service_name)
-        if self._topdown_grasp_client.wait_for_service(timeout_sec=0.5):
+        # A new process needs ~1.5 s to discover other nodes services, so 0.5 s reported it missing.
+        if self._topdown_grasp_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().info(
                 f"Top-down grasp service '{topdown_grasp_service_name}' is available."
             )
@@ -65,6 +69,11 @@ class ManualScanClient(Node):
             self.get_logger().warning(
                 f"Top-down grasp service '{topdown_grasp_service_name}' is not available yet."
             )
+
+        carry_pose_service_name = self.get_parameter("carry_pose_service_name").value
+        self._carry_pose_client = (
+            self.create_client(Trigger, carry_pose_service_name) if carry_pose_service_name else None
+        )
 
     def _on_color(self, msg: CompressedImage):
         with self._lock:
@@ -150,15 +159,13 @@ class ManualScanClient(Node):
     def _call_grasp_carry(self, detection) -> None:
         grasp_direction = str(detection.grasp_direction).strip().lower()
         # Testing the top-down grasp: always use it, whatever grasp_direction says.
-        # if grasp_direction == "top":
-        #     client = self._topdown_grasp_client
-        #     service_name = self.get_parameter("topdown_grasp_service_name").value
-        # else:
-        # client = self._grasp_client
-        # service_name = self.get_parameter("grasp_service_name").value
-        client = self._topdown_grasp_client
-        service_name = self.get_parameter("topdown_grasp_service_name").value
-
+        if grasp_direction == "top":
+            client = self._topdown_grasp_client
+            service_name = self.get_parameter("topdown_grasp_service_name").value
+        else:
+            client = self._grasp_client
+            service_name = self.get_parameter("grasp_service_name").value
+            
         if not client.wait_for_service(timeout_sec=2.0):
             print(f"Selected grasp service '{service_name}' is unavailable.")
             return
@@ -191,6 +198,24 @@ class ManualScanClient(Node):
 
         response = future.result()
         print(f"Grasp response: success={response.success} message='{response.message}'")
+        if response.success:
+            self._call_carry_pose()
+
+    def _call_carry_pose(self) -> None:
+        if self._carry_pose_client is None:
+            return
+        service_name = self.get_parameter("carry_pose_service_name").value
+        if not self._carry_pose_client.wait_for_service(timeout_sec=2.0):
+            print(f"Carry pose service '{service_name}' is unavailable, so leaving the gripper where it is.")
+            return
+        future = self._carry_pose_client.call_async(Trigger.Request())
+        while rclpy.ok() and not future.done():
+            time.sleep(0.05)
+        if not future.done() or future.result() is None:
+            print("Carry pose request did not complete.")
+            return
+        result = future.result()
+        print(f"Carry pose response: success={result.success} message='{result.message}'")
 
 
 def main():
