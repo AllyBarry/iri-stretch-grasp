@@ -6,7 +6,7 @@ from typing import List,Dict,Any
 from ament_index_python.packages import get_package_share_directory
 
 from unaceba.task.state import State
-from unaceba.utils.variables import CategoricalRange, NormalisedFloatRange, BooleanRange
+from unaceba.utils.variables import CategoricalRange, NormalisedFloatRange, BooleanRange, AnyRange
 
 _PKG = "stretch_floor_perception"
 _CATEGORY_LABELS = {"Ingredients": "ingredient", "Tools": "tool"}
@@ -70,7 +70,12 @@ class StretchState(State):
         state_vars = [
             "recipe/type",
             "recipe/name",
-            "target_object"
+            "target_object",
+            "target_location",
+            "scan/objects",
+            "target_detection",
+            "target_found",
+            "holding_object",
         ]
 
         var_ranges = (var_ranges or {}) | {
@@ -90,12 +95,33 @@ class StretchState(State):
                 self.get_objects(),
                 allow_none=True
             ),
+            "target_location": CategoricalRange(
+                self._LOCATIONS,
+                allow_none=True
+            ),
+            "scan/objects": AnyRange(list),
+            "target_detection": AnyRange(dict),
+            "target_found": BooleanRange(),
+            "holding_object": CategoricalRange(
+                self.get_objects(),
+                allow_none=True
+            ),
         }
 
         semantic_dict = (semantic_dict or {}) | {
             "recipe/type": "The broad category of recipe, e.g. 'salad' or 'sandwich'",
             "recipe/name": "The specific recipe ID, e.g. 'caprese_salad' or 'ham_cheese_tomato_sandwich'",
-            "target_object": "The object the robot has decided to fetch to bring to the human"
+            "target_object": "The object the robot has decided to fetch to bring to the human",
+            "target_location": "The location the robot has decided to go to look for the target object",
+            "scan/objects": "The objects the robot saw in its most recent scan of a surface",
+            "target_detection": "Where the robot saw the target object in its most recent search, or None if it was not seen",
+            "target_found": "Whether or not the robot saw the target object in its most recent search",
+            "holding_object": "The object the robot is holding in its gripper, or None if the gripper is empty",
+        }
+
+        skill_defaults = {
+            "scan/objects": [],
+            "target_found": False,
         }
 
         # Confidence in locations
@@ -149,6 +175,7 @@ class StretchState(State):
             }
             for var in availability_defaults:
                 values[var] = availability_defaults[var]
+            values.update(skill_defaults)
 
         super().__init__(
             state_vars=state_vars,
@@ -166,6 +193,10 @@ class StretchState(State):
         path = Path(get_package_share_directory(_PKG)) / "config" / "recipes" / f"{recipe}.json"
         with open(path, "r") as f:
             return json.load(f)
+
+    @staticmethod
+    def get_locations():
+        return list(StretchState._LOCATIONS)
 
     @staticmethod
     def get_objects():
