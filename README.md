@@ -59,6 +59,14 @@ Python dependencies by feature:
 
 `onnxruntime` is listed as a backend but is a placeholder that returns no detections.
 
+### Speech workspace
+
+`stretch_speech_ws/` turns speech into high-level task commands (`speech_task`,
+`speech_task_interfaces`). It is a separate colcon workspace with its own Python venv,
+built on the PC rather than the robot, and is not part of this package's build: colcon
+does not look for packages inside a package, so building `stretch_floor_perception`
+leaves it out. See [stretch_speech_ws/README.md](stretch_speech_ws/README.md) for setup.
+
 ## Running
 
 ### Full stack
